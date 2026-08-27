@@ -97,16 +97,16 @@ export interface Quote {
   materialRef: { materialCode: string; effectiveFrom: string };
   material: MaterialSnapshot;
 
-  laborRef: { record: string };
+  laborRef: { record: string; effectiveFrom: string };
   labor: LaborSnapshot;
 
-  packingRef: { records: string[] };
+  packingRef: { records: string[]; effectiveFrom: string };
   packing: PackingSnapshot;
 
-  transportationRef: { record: string };
+  transportationRef: { record: string; effectiveFrom: string };
   transportation: TransportationSnapshot;
 
-  exchangeRateRef: { record: string };
+  exchangeRateRef: { record: string; effectiveFrom: string };
   exchangeRate: ExchangeRateSnapshot;
 
   tooling: ToolingSnapshot;

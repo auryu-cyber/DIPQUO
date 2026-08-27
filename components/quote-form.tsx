@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { calculateSummary, laborCostByProcess, packingItemCostPerPc } from "@/lib/calc";
 import { saveQuoteAction } from "@/app/quotes/actions";
 import { resolveAsOf } from "@/lib/masters-lookup";
@@ -15,6 +15,8 @@ import type {
   MaterialSnapshot,
   LaborSnapshot,
   ExchangeRateSnapshot,
+  PackingSnapshot,
+  TransportationSnapshot,
 } from "@/lib/types";
 import type { QuoteFormMasters } from "@/lib/masters-lookup";
 
@@ -23,6 +25,43 @@ const PACKING_CODES = ["plastic-bag", "carton-box", "paper-pallet"];
 const DEFAULT_LOSS_RATE = { setting: 0.02, moulding: 0.02, cutting: 0.02, inspection: 0.02 };
 
 type FormState = Omit<Quote, "calculated" | "updatedAt" | "updatedBy">;
+
+/** Minimal undo/redo history: every setState call pushes the previous value,
+ *  and Ctrl+Z / Ctrl+Y (wired below) walk the stacks. */
+function useUndoableState<T>(initial: T | (() => T)) {
+  const [state, setStateRaw] = useState<T>(initial);
+  const undoStack = useRef<T[]>([]);
+  const redoStack = useRef<T[]>([]);
+
+  const setState = useCallback((updater: T | ((prev: T) => T)) => {
+    setStateRaw((prev) => {
+      const next = typeof updater === "function" ? (updater as (p: T) => T)(prev) : updater;
+      undoStack.current.push(prev);
+      redoStack.current = [];
+      return next;
+    });
+  }, []);
+
+  const undo = useCallback(() => {
+    setStateRaw((current) => {
+      const prev = undoStack.current.pop();
+      if (prev === undefined) return current;
+      redoStack.current.push(current);
+      return prev;
+    });
+  }, []);
+
+  const redo = useCallback(() => {
+    setStateRaw((current) => {
+      const next = redoStack.current.pop();
+      if (next === undefined) return current;
+      undoStack.current.push(current);
+      return next;
+    });
+  }, []);
+
+  return [state, setState, undo, redo] as const;
+}
 
 function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
@@ -36,13 +75,57 @@ function resolvePackingAsOf(masters: QuoteFormMasters, code: string, asOf: strin
   return resolveAsOf(masters.packingItems.find((p) => p.code === code)?.history ?? [], asOf);
 }
 
+function resolveLaborSnapshot(
+  masters: QuoteFormMasters,
+  asOf: string
+): { ref: { record: string; effectiveFrom: string }; hourlyChargeTHB: number } {
+  const rec = resolveAsOf(masters.laborRateHistory, asOf);
+  return {
+    ref: { record: rec ? `labor-rates/default/${rec.effectiveFrom}` : "", effectiveFrom: rec?.effectiveFrom ?? asOf },
+    hourlyChargeTHB: rec?.hourlyChargeTHB ?? 0,
+  };
+}
+
+function resolveTransportationSnapshot(
+  masters: QuoteFormMasters,
+  asOf: string
+): { ref: { record: string; effectiveFrom: string }; values: TransportationSnapshot } {
+  const rec = resolveAsOf(masters.transportationHistory, asOf);
+  return {
+    ref: { record: rec ? `transportation/default/${rec.effectiveFrom}` : "", effectiveFrom: rec?.effectiveFrom ?? asOf },
+    values: { vehicleTHB: rec?.vehicleTHB ?? 0, fuelTHB: rec?.fuelTHB ?? 0, qtyPerTrip: rec?.qtyPerTrip ?? 1 },
+  };
+}
+
+function resolvePackingSnapshot(
+  masters: QuoteFormMasters,
+  asOf: string
+): { ref: { records: string[]; effectiveFrom: string }; snapshot: PackingSnapshot } {
+  const resolved = PACKING_CODES.map((code) => resolvePackingAsOf(masters, code, asOf));
+  return {
+    ref: {
+      records: PACKING_CODES.map((code, i) => {
+        const rec = resolved[i];
+        return rec ? `packing-costs/${code}/${rec.effectiveFrom}` : "";
+      }),
+      effectiveFrom: asOf,
+    },
+    snapshot: {
+      items: PACKING_CODES.map((code, i) => {
+        const rec = resolved[i];
+        return { name: rec?.displayName ?? code, priceTHB: rec?.priceTHB ?? 0, qtyPerUnit: rec?.qtyPerUnit ?? 1 };
+      }),
+    },
+  };
+}
+
 function resolveExchangeSnapshot(
   masters: QuoteFormMasters,
   asOf: string
-): { ref: { record: string }; snap: ExchangeRateSnapshot } {
+): { ref: { record: string; effectiveFrom: string }; snap: ExchangeRateSnapshot } {
   const rec = resolveAsOf(masters.exchangeRateHistory, asOf);
   return {
-    ref: { record: rec ? `exchange-rates/default/${rec.effectiveFrom}` : "" },
+    ref: { record: rec ? `exchange-rates/default/${rec.effectiveFrom}` : "", effectiveFrom: rec?.effectiveFrom ?? asOf },
     snap: { jpyPerThb: rec?.jpyPerThb ?? 0, usdPerThb: rec?.usdPerThb ?? 0 },
   };
 }
@@ -77,10 +160,10 @@ function emptyForm(masters: QuoteFormMasters): FormState {
   const asOf = todayStr();
   const firstMaterial = masters.materials[0];
   const materialRec = firstMaterial ? resolveMaterialAsOf(masters, firstMaterial.code, asOf) : undefined;
-  const laborRec = resolveAsOf(masters.laborRateHistory, asOf);
-  const transportRec = resolveAsOf(masters.transportationHistory, asOf);
+  const laborR = resolveLaborSnapshot(masters, asOf);
+  const transportR = resolveTransportationSnapshot(masters, asOf);
+  const packingR = resolvePackingSnapshot(masters, asOf);
   const fx = resolveExchangeSnapshot(masters, asOf);
-  const packingResolved = PACKING_CODES.map((code) => resolvePackingAsOf(masters, code, asOf));
 
   return {
     id: "",
@@ -89,16 +172,16 @@ function emptyForm(masters: QuoteFormMasters): FormState {
     status: "draft",
     monthlyQty: 0,
     pricingDate: asOf,
-    materialRef: { materialCode: firstMaterial?.code ?? "", effectiveFrom: materialRec?.effectiveFrom ?? "" },
+    materialRef: { materialCode: firstMaterial?.code ?? "", effectiveFrom: materialRec?.effectiveFrom ?? asOf },
     material: {
       name: materialRec?.displayName ?? "",
       pricePerKg: materialRec?.pricePerKg ?? 0,
       weightG: 0,
       lossRate: { ...DEFAULT_LOSS_RATE },
     },
-    laborRef: { record: laborRec ? `labor-rates/default/${laborRec.effectiveFrom}` : "" },
+    laborRef: laborR.ref,
     labor: {
-      hourlyChargeTHB: laborRec?.hourlyChargeTHB ?? 0,
+      hourlyChargeTHB: laborR.hourlyChargeTHB,
       processes: [
         { name: "Dipping", qtyPerShot: 0, cycleTimeMin: 1, machines: 1, lossRate: 0.04 } satisfies DippingProcess,
         { name: "Cutting (Manual)", qtyPerHour: 0, lossRate: 0.02 } satisfies HourlyProcess,
@@ -106,29 +189,41 @@ function emptyForm(masters: QuoteFormMasters): FormState {
         { name: "Packing", secPerPc: 0, lossRate: 0.01 } satisfies PerPieceTimeProcess,
       ],
     },
-    packingRef: {
-      records: PACKING_CODES.map((code, i) => {
-        const rec = packingResolved[i];
-        return rec ? `packing-costs/${code}/${rec.effectiveFrom}` : "";
-      }),
-    },
-    packing: {
-      items: PACKING_CODES.map((code, i) => {
-        const rec = packingResolved[i];
-        return { name: rec?.displayName ?? code, priceTHB: rec?.priceTHB ?? 0, qtyPerUnit: rec?.qtyPerUnit ?? 1 };
-      }),
-    },
-    transportationRef: { record: transportRec ? `transportation/default/${transportRec.effectiveFrom}` : "" },
-    transportation: {
-      vehicleTHB: transportRec?.vehicleTHB ?? 0,
-      fuelTHB: transportRec?.fuelTHB ?? 0,
-      qtyPerTrip: transportRec?.qtyPerTrip ?? 1,
-    },
+    packingRef: packingR.ref,
+    packing: packingR.snapshot,
+    transportationRef: transportR.ref,
+    transportation: transportR.values,
     exchangeRateRef: fx.ref,
     exchangeRate: fx.snap,
     tooling: { items: [], customerMarkup: 1.25 },
     overheadRate: 0.1,
     profitRate: 0.5,
+  };
+}
+
+/** Backfills the per-category effectiveFrom dates for a quote saved before they existed. */
+function withDateFallbacks(base: FormState, masters: QuoteFormMasters): FormState {
+  const fallback = base.pricingDate ?? todayStr();
+  const materialRef = base.materialRef.effectiveFrom ? base.materialRef : { ...base.materialRef, effectiveFrom: fallback };
+  const laborRef = base.laborRef.effectiveFrom ? base.laborRef : { ...base.laborRef, effectiveFrom: fallback };
+  const transportationRef = base.transportationRef.effectiveFrom
+    ? base.transportationRef
+    : { ...base.transportationRef, effectiveFrom: fallback };
+  const packingRef = base.packingRef.effectiveFrom ? base.packingRef : { ...base.packingRef, effectiveFrom: fallback };
+  const exchangeRateRef = base.exchangeRateRef?.effectiveFrom
+    ? base.exchangeRateRef
+    : { ...(base.exchangeRateRef ?? { record: "" }), effectiveFrom: fallback };
+  const exchangeRate = base.exchangeRate ?? resolveExchangeSnapshot(masters, exchangeRateRef.effectiveFrom).snap;
+
+  return {
+    ...base,
+    pricingDate: fallback,
+    materialRef,
+    laborRef,
+    transportationRef,
+    packingRef,
+    exchangeRateRef,
+    exchangeRate,
   };
 }
 
@@ -141,17 +236,41 @@ export function QuoteForm({
   initialQuote?: Quote;
   previousSha?: string;
 }) {
-  const [form, setForm] = useState<FormState>(() => {
-    if (!initialQuote) return emptyForm(masters);
-    const base = toFormState(initialQuote);
-    const pricingDate = base.pricingDate ?? todayStr();
-    const fx = base.exchangeRate ?? resolveExchangeSnapshot(masters, pricingDate).snap;
-    const fxRef = base.exchangeRateRef ?? resolveExchangeSnapshot(masters, pricingDate).ref;
-    return { ...base, pricingDate, exchangeRate: fx, exchangeRateRef: fxRef };
-  });
-  const [finalPriceOverride, setFinalPriceOverride] = useState<number | null>(
-    initialQuote?.calculated.finalPriceToCustomer ?? null
-  );
+  const [state, setState, undoState, redoState] = useUndoableState<{
+    form: FormState;
+    finalPriceOverride: number | null;
+  }>(() => ({
+    form: initialQuote ? withDateFallbacks(toFormState(initialQuote), masters) : emptyForm(masters),
+    finalPriceOverride: initialQuote?.calculated.finalPriceToCustomer ?? null,
+  }));
+  const { form, finalPriceOverride } = state;
+
+  function setForm(updater: FormState | ((f: FormState) => FormState)) {
+    setState((s) => ({
+      ...s,
+      form: typeof updater === "function" ? (updater as (f: FormState) => FormState)(s.form) : updater,
+    }));
+  }
+  function setFinalPriceOverride(value: number | null) {
+    setState((s) => ({ ...s, finalPriceOverride: value }));
+  }
+
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undoState();
+      } else if (key === "y" || (key === "z" && e.shiftKey)) {
+        e.preventDefault();
+        redoState();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [undoState, redoState]);
+
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
@@ -174,10 +293,11 @@ export function QuoteForm({
 
   function selectMaterial(code: string) {
     setForm((f) => {
-      const rec = resolveMaterialAsOf(masters, code, f.pricingDate);
+      const asOf = f.materialRef.effectiveFrom || todayStr();
+      const rec = resolveMaterialAsOf(masters, code, asOf);
       return {
         ...f,
-        materialRef: { materialCode: code, effectiveFrom: rec?.effectiveFrom ?? "" },
+        materialRef: { materialCode: code, effectiveFrom: rec?.effectiveFrom ?? asOf },
         material: rec
           ? { ...f.material, name: rec.displayName, pricePerKg: rec.pricePerKg, overridden: false }
           : f.material,
@@ -185,47 +305,44 @@ export function QuoteForm({
     });
   }
 
-  function changePricingDate(newDate: string) {
+  function changeMaterialDate(newDate: string) {
     setForm((f) => {
-      const materialRec = resolveMaterialAsOf(masters, f.materialRef.materialCode, newDate);
-      const laborRec = resolveAsOf(masters.laborRateHistory, newDate);
-      const transportRec = resolveAsOf(masters.transportationHistory, newDate);
-      const fx = resolveExchangeSnapshot(masters, newDate);
-      const packingResolved = PACKING_CODES.map((code) => resolvePackingAsOf(masters, code, newDate));
-
+      const rec = resolveMaterialAsOf(masters, f.materialRef.materialCode, newDate);
       return {
         ...f,
-        pricingDate: newDate,
-        materialRef: {
-          materialCode: f.materialRef.materialCode,
-          effectiveFrom: materialRec?.effectiveFrom ?? f.materialRef.effectiveFrom,
-        },
-        material: materialRec
-          ? { ...f.material, name: materialRec.displayName, pricePerKg: materialRec.pricePerKg, overridden: false }
+        materialRef: { materialCode: f.materialRef.materialCode, effectiveFrom: rec?.effectiveFrom ?? newDate },
+        material: rec
+          ? { ...f.material, name: rec.displayName, pricePerKg: rec.pricePerKg, overridden: false }
           : f.material,
-        laborRef: { record: laborRec ? `labor-rates/default/${laborRec.effectiveFrom}` : f.laborRef.record },
-        labor: laborRec ? { ...f.labor, hourlyChargeTHB: laborRec.hourlyChargeTHB } : f.labor,
-        transportationRef: {
-          record: transportRec ? `transportation/default/${transportRec.effectiveFrom}` : f.transportationRef.record,
-        },
-        transportation: transportRec
-          ? { vehicleTHB: transportRec.vehicleTHB, fuelTHB: transportRec.fuelTHB, qtyPerTrip: transportRec.qtyPerTrip }
-          : f.transportation,
-        packingRef: {
-          records: PACKING_CODES.map((code, i) => {
-            const rec = packingResolved[i];
-            return rec ? `packing-costs/${code}/${rec.effectiveFrom}` : f.packingRef.records[i] ?? "";
-          }),
-        },
-        packing: {
-          items: f.packing.items.map((item, i) => {
-            const rec = packingResolved[i];
-            return rec ? { name: rec.displayName, priceTHB: rec.priceTHB, qtyPerUnit: rec.qtyPerUnit } : item;
-          }),
-        },
-        exchangeRateRef: fx.ref,
-        exchangeRate: fx.snap,
       };
+    });
+  }
+
+  function changeLaborDate(newDate: string) {
+    setForm((f) => {
+      const r = resolveLaborSnapshot(masters, newDate);
+      return { ...f, laborRef: r.ref, labor: { ...f.labor, hourlyChargeTHB: r.hourlyChargeTHB } };
+    });
+  }
+
+  function changeTransportationDate(newDate: string) {
+    setForm((f) => {
+      const r = resolveTransportationSnapshot(masters, newDate);
+      return { ...f, transportationRef: r.ref, transportation: r.values };
+    });
+  }
+
+  function changePackingDate(newDate: string) {
+    setForm((f) => {
+      const r = resolvePackingSnapshot(masters, newDate);
+      return { ...f, packingRef: r.ref, packing: r.snapshot };
+    });
+  }
+
+  function changeExchangeRateDate(newDate: string) {
+    setForm((f) => {
+      const fx = resolveExchangeSnapshot(masters, newDate);
+      return { ...f, exchangeRateRef: fx.ref, exchangeRate: fx.snap };
     });
   }
 
@@ -356,18 +473,13 @@ export function QuoteForm({
                   ))}
                 </select>
               </Field>
-              <Field label="Pricing Date (Master Rates as of)">
-                <input
-                  type="date"
-                  value={form.pricingDate}
-                  onChange={(e) => changePricingDate(e.target.value)}
-                  className="input"
-                />
-              </Field>
             </div>
           </Section>
 
-          <Section title="Material Cost">
+          <Section
+            title="Material Cost"
+            right={<InlineDateField value={form.materialRef.effectiveFrom} onChange={changeMaterialDate} />}
+          >
             <div className="grid grid-cols-3 gap-3.5 mb-4">
               <Field label="Material (from master)">
                 <select
@@ -426,7 +538,10 @@ export function QuoteForm({
             </div>
           </Section>
 
-          <Section title="Labor Cost (by Process)">
+          <Section
+            title="Labor Cost (by Process)"
+            right={<InlineDateField value={form.laborRef.effectiveFrom} onChange={changeLaborDate} />}
+          >
             <div className="grid grid-cols-2 gap-3">
               {form.labor.processes.map((p, i) => {
                 const derived = deriveProcessLossRate(p.name, form.material);
@@ -477,7 +592,11 @@ export function QuoteForm({
           </Section>
 
           <div className="flex gap-4">
-            <Section title="Packing Cost" className="flex-1">
+            <Section
+              title="Packing Cost"
+              className="flex-1"
+              right={<InlineDateField value={form.packingRef.effectiveFrom} onChange={changePackingDate} />}
+            >
               {form.packing.items.map((item, i) => (
                 <div key={item.name} className="grid grid-cols-4 gap-2 mb-2 items-end">
                   <div className="text-xs text-gray-600 col-span-1">{item.name}</div>
@@ -493,7 +612,11 @@ export function QuoteForm({
               </div>
             </Section>
 
-            <Section title="Transportation Cost" className="flex-1">
+            <Section
+              title="Transportation Cost"
+              className="flex-1"
+              right={<InlineDateField value={form.transportationRef.effectiveFrom} onChange={changeTransportationDate} />}
+            >
               <div className="grid grid-cols-3 gap-2">
                 <NumField
                   label="Vehicle (THB)"
@@ -518,24 +641,30 @@ export function QuoteForm({
           </div>
 
           <Section title="Tooling Cost (Initial Investment)">
-            {form.tooling.items.map((item, i) => (
-              <div key={i} className="grid grid-cols-4 gap-2 mb-2 items-end">
-                <input
-                  value={item.name}
-                  onChange={(e) => updateToolingItem(i, { name: e.target.value })}
-                  className="input col-span-1"
-                />
-                <NumField label="Qty" value={item.qty ?? 0} onChange={(v) => updateToolingItem(i, { qty: v, totalTHB: undefined })} />
-                <NumField
-                  label="Unit Price (THB)"
-                  value={item.unitPriceTHB ?? 0}
-                  onChange={(v) => updateToolingItem(i, { unitPriceTHB: v, totalTHB: undefined })}
-                />
-                <button onClick={() => removeToolingItem(i)} className="text-xs text-knt-red text-left">
-                  Remove
-                </button>
-              </div>
-            ))}
+            {form.tooling.items.map((item, i) => {
+              const subtotal = item.totalTHB ?? (item.qty ?? 0) * (item.unitPriceTHB ?? 0);
+              return (
+                <div key={i} className="grid grid-cols-5 gap-2 mb-2 items-end">
+                  <input
+                    value={item.name}
+                    onChange={(e) => updateToolingItem(i, { name: e.target.value })}
+                    className="input col-span-1"
+                  />
+                  <NumField label="Qty" value={item.qty ?? 0} onChange={(v) => updateToolingItem(i, { qty: v, totalTHB: undefined })} />
+                  <NumField
+                    label="Unit Price (THB)"
+                    value={item.unitPriceTHB ?? 0}
+                    onChange={(v) => updateToolingItem(i, { unitPriceTHB: v, totalTHB: undefined })}
+                  />
+                  <Field label="Subtotal">
+                    <div className="input bg-gray-50 text-gray-500 text-right">{formatNumber(subtotal)} THB</div>
+                  </Field>
+                  <button onClick={() => removeToolingItem(i)} className="text-xs text-knt-red text-left">
+                    Remove
+                  </button>
+                </div>
+              );
+            })}
             <button onClick={addToolingItem} className="text-xs text-knt-blue mt-1">
               + Add item
             </button>
@@ -586,11 +715,25 @@ export function QuoteForm({
                 className="w-full bg-transparent text-center text-white font-heading text-2xl font-bold outline-none mt-1"
               />
               <div className="text-[11px] text-knt-blue-gray mb-2">THB / pc</div>
+
+              <div className="flex items-center justify-between text-[10px] text-knt-blue-gray">
+                <span>Exchange Rate as of</span>
+                <input
+                  type="date"
+                  value={form.exchangeRateRef.effectiveFrom}
+                  onChange={(e) => changeExchangeRateDate(e.target.value)}
+                  className="bg-white/10 border border-white/25 rounded-md px-1.5 py-0.5 text-white text-[10px]"
+                />
+              </div>
+              <div className="text-[10px] text-knt-blue-gray text-right mb-1">
+                1 THB = {formatNumber(form.exchangeRate.jpyPerThb, 4)} JPY / {formatNumber(form.exchangeRate.usdPerThb, 4)} USD
+              </div>
               <div className="text-[10.5px] text-knt-blue-gray flex justify-center gap-1">
                 <span>≈ {formatNumber(finalPrice * form.exchangeRate.jpyPerThb)} JPY</span>
                 <span>·</span>
                 <span>≈ {formatNumber(finalPrice * form.exchangeRate.usdPerThb)} USD</span>
               </div>
+
               <div className="text-[11px] text-white/90 font-medium mt-2 pt-2 border-t border-white/15">
                 Material {formatPercent(summary.materialPct)} · Gross Margin {formatPercent(summary.grossMarginPct)}
               </div>
@@ -629,10 +772,23 @@ export function QuoteForm({
   );
 }
 
-function Section({ title, children, className = "" }: { title: string; children: React.ReactNode; className?: string }) {
+function Section({
+  title,
+  children,
+  className = "",
+  right,
+}: {
+  title: string;
+  children: React.ReactNode;
+  className?: string;
+  right?: React.ReactNode;
+}) {
   return (
     <div className={`bg-white rounded-[14px] border border-gray-100 p-5 ${className}`}>
-      <div className="text-sm font-bold text-knt-navy mb-3">{title}</div>
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-sm font-bold text-knt-navy">{title}</div>
+        {right}
+      </div>
       {children}
     </div>
   );
@@ -644,6 +800,21 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
       <div className="text-[11px] text-gray-500 mb-1">{label}</div>
       {children}
     </div>
+  );
+}
+
+/** Compact date picker used in section headers to pick which period's master rate to use. */
+function InlineDateField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <label className="flex items-center gap-1.5 text-[10.5px] text-gray-400">
+      Rate as of
+      <input
+        type="date"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="border border-knt-pale-blue rounded-md px-1.5 py-1 text-[11px] text-gray-700"
+      />
+    </label>
   );
 }
 

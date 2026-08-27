@@ -1,4 +1,4 @@
-import { getJsonFile, listDir, listSubdirs } from "@/lib/github";
+import { getJsonFile, putJsonFile, deleteFile, listDir, listSubdirs } from "@/lib/github";
 
 export type MasterType = "materials" | "labor-rates" | "packing-costs" | "transportation" | "exchange-rates";
 
@@ -72,7 +72,7 @@ export async function resolveCurrentMaster<T extends MasterRecordBase>(
   return inEffect?.data ?? null;
 }
 
-/** Add a new dated master record. Records are immutable: this always creates a new file, never overwrites. */
+/** Add a new dated master record (a new effective period). */
 export async function addMasterRecord<T extends MasterRecordBase>(
   type: MasterType,
   code: string,
@@ -80,6 +80,47 @@ export async function addMasterRecord<T extends MasterRecordBase>(
   authorEmail: string
 ): Promise<void> {
   const path = `masters/${type}/${code}/${data.effectiveFrom}.json`;
-  const { putJsonFile } = await import("@/lib/github");
   await putJsonFile(path, data, `master(${type}/${code}): add record effective ${data.effectiveFrom}`, authorEmail);
+}
+
+/** Correct an existing dated record in place. If `data.effectiveFrom` differs from
+ *  `originalEffectiveFrom`, the period is renamed: the old file is removed and a new one written. */
+export async function updateMasterRecord<T extends MasterRecordBase>(
+  type: MasterType,
+  code: string,
+  originalEffectiveFrom: string,
+  data: T,
+  authorEmail: string
+): Promise<void> {
+  const newPath = `masters/${type}/${code}/${data.effectiveFrom}.json`;
+  if (data.effectiveFrom !== originalEffectiveFrom) {
+    const oldPath = `masters/${type}/${code}/${originalEffectiveFrom}.json`;
+    const existing = await getJsonFile<T>(oldPath);
+    await putJsonFile(newPath, data, `master(${type}/${code}): update record, renamed to ${data.effectiveFrom}`, authorEmail);
+    if (existing) {
+      await deleteFile(oldPath, `master(${type}/${code}): remove ${originalEffectiveFrom} (renamed to ${data.effectiveFrom})`, existing.sha);
+    }
+    return;
+  }
+  const existing = await getJsonFile<T>(newPath);
+  await putJsonFile(
+    newPath,
+    data,
+    `master(${type}/${code}): update record effective ${data.effectiveFrom}`,
+    authorEmail,
+    existing?.sha
+  );
+}
+
+/** Permanently removes one dated record. */
+export async function deleteMasterRecord(
+  type: MasterType,
+  code: string,
+  effectiveFrom: string,
+  authorEmail: string
+): Promise<void> {
+  const path = `masters/${type}/${code}/${effectiveFrom}.json`;
+  const existing = await getJsonFile(path);
+  if (!existing) return;
+  await deleteFile(path, `master(${type}/${code}): delete record effective ${effectiveFrom} by ${authorEmail}`, existing.sha);
 }
