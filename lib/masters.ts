@@ -1,6 +1,6 @@
 import { getJsonFile, listDir, listSubdirs } from "@/lib/github";
 
-export type MasterType = "materials" | "labor-rates" | "packing-costs" | "transportation";
+export type MasterType = "materials" | "labor-rates" | "packing-costs" | "transportation" | "exchange-rates";
 
 export interface MasterRecordBase {
   effectiveFrom: string; // YYYY-MM-DD
@@ -31,6 +31,12 @@ export interface TransportationRecord extends MasterRecordBase {
   vehicleTHB: number;
   fuelTHB: number;
   qtyPerTrip: number;
+}
+
+/** THB-based FX rate: multiply a THB amount by these to get the JPY / USD equivalent. */
+export interface ExchangeRateRecord extends MasterRecordBase {
+  jpyPerThb: number;
+  usdPerThb: number;
 }
 
 /** List every master "code" (e.g. material code) that exists under a master type. */

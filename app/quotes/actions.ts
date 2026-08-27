@@ -16,16 +16,20 @@ export interface SaveQuoteResult {
 
 export async function saveQuoteAction(
   quote: Omit<Quote, "calculated" | "updatedAt" | "updatedBy">,
-  previousSha: string | undefined
+  previousSha: string | undefined,
+  renameFrom?: { id: string; variant: string }
 ): Promise<SaveQuoteResult> {
   const session = await getServerSession(authOptions);
   const email = session?.user?.email;
   if (!email) {
     return { ok: false, error: "Not signed in." };
   }
+  if (!quote.id.trim() || !quote.variant.trim()) {
+    return { ok: false, error: "Product ID and Variant are required." };
+  }
 
   try {
-    await saveQuoteInternal({ quote, previousSha, updatedBy: email });
+    await saveQuoteInternal({ quote, previousSha, updatedBy: email, renameFrom });
 
     await appendLog(
       "activity",
@@ -41,6 +45,9 @@ export async function saveQuoteAction(
 
     revalidatePath("/quotes");
     revalidatePath(`/quotes/${quote.id}/${quote.variant}`);
+    if (renameFrom && (renameFrom.id !== quote.id || renameFrom.variant !== quote.variant)) {
+      revalidatePath(`/quotes/${renameFrom.id}/${renameFrom.variant}`);
+    }
   } catch (err) {
     if (err instanceof QuoteConflictError) {
       return { ok: false, error: "Someone else updated this quote. Reload the page and try again." };

@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { addMasterRecordAction } from "@/app/masters/actions";
+import { formatNumber } from "@/lib/format";
 import type { MasterType } from "@/lib/masters";
 
 export interface FieldSpec {
@@ -16,6 +17,10 @@ export interface HistoryEntry {
   displayName?: string;
   note?: string;
   recordedBy: string;
+}
+
+function todayStr(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 export function MasterItem({
@@ -36,11 +41,12 @@ export function MasterItem({
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
-  const current = history[0];
+  const today = todayStr();
+  const current = history.find((h) => h.effectiveFrom <= today) ?? history[0];
 
   const [form, setForm] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {
-      effectiveFrom: new Date().toISOString().slice(0, 10),
+      effectiveFrom: today,
       note: "",
     };
     if (hasDisplayName) init.displayName = current?.displayName ?? "";
@@ -71,25 +77,56 @@ export function MasterItem({
         <div>
           <div className="text-sm font-medium text-knt-navy">{displayLabel}</div>
           <div className="text-[11px] text-gray-400">
-            {current ? `Effective ${current.effectiveFrom} · by ${current.recordedBy}` : "No records yet"}
+            {history.length} period rate{history.length === 1 ? "" : "s"} on file
+            {current ? ` · currently ${current.effectiveFrom}` : ""}
           </div>
         </div>
-        <div className="flex items-center gap-4">
-          {current && (
-            <div className="flex gap-4 text-xs text-gray-600">
-              {fields.map((f) => (
-                <div key={f.key} className="text-right">
-                  <div className="text-[10px] text-gray-400">{f.label}</div>
-                  <div className="font-medium">{current.values[f.key]}</div>
-                </div>
-              ))}
-            </div>
-          )}
-          <button onClick={() => setOpen((o) => !o)} className="text-xs text-knt-blue font-medium">
-            {open ? "Cancel" : "Add revision"}
-          </button>
-        </div>
+        <button onClick={() => setOpen((o) => !o)} className="text-xs text-knt-blue font-medium">
+          {open ? "Cancel" : "+ Add rate for a period"}
+        </button>
       </div>
+
+      {history.length > 0 && (
+        <div className="mt-3 overflow-x-auto">
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr>
+                <th className="text-left text-[10.5px] font-medium text-gray-400 px-2.5 py-1.5">Effective From</th>
+                {hasDisplayName && <th className="text-left text-[10.5px] font-medium text-gray-400 px-2.5 py-1.5">Name</th>}
+                {fields.map((f) => (
+                  <th key={f.key} className="text-right text-[10.5px] font-medium text-gray-400 px-2.5 py-1.5">
+                    {f.label}
+                  </th>
+                ))}
+                <th className="text-left text-[10.5px] font-medium text-gray-400 px-2.5 py-1.5">Recorded By</th>
+                <th className="text-left text-[10.5px] font-medium text-gray-400 px-2.5 py-1.5">Note</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((h) => (
+                <tr key={h.effectiveFrom} className={h === current ? "bg-knt-blue/[0.06]" : ""}>
+                  <td className="px-2.5 py-1.5 font-medium text-knt-navy">
+                    {h.effectiveFrom}
+                    {h === current && (
+                      <span className="ml-1.5 text-[9.5px] font-bold text-knt-blue bg-knt-blue/10 rounded-full px-1.5 py-0.5">
+                        Current
+                      </span>
+                    )}
+                  </td>
+                  {hasDisplayName && <td className="px-2.5 py-1.5">{h.displayName}</td>}
+                  {fields.map((f) => (
+                    <td key={f.key} className="text-right px-2.5 py-1.5">
+                      {formatNumber(h.values[f.key] ?? 0, f.step && f.step >= 1 ? 0 : 2)}
+                    </td>
+                  ))}
+                  <td className="px-2.5 py-1.5 text-gray-500">{h.recordedBy}</td>
+                  <td className="px-2.5 py-1.5 text-gray-400">{h.note ?? ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {open && (
         <div className="mt-3 pt-3 border-t border-gray-100 grid grid-cols-4 gap-2.5 items-end">
@@ -108,6 +145,7 @@ export function MasterItem({
               <div className="text-[11px] text-gray-500 mb-1">{f.label}</div>
               <input
                 type="number"
+                inputMode="decimal"
                 step={f.step ?? 0.01}
                 value={form[f.key] ?? ""}
                 onChange={(e) => setForm((s) => ({ ...s, [f.key]: e.target.value }))}
@@ -134,7 +172,7 @@ export function MasterItem({
               disabled={isPending}
               className="bg-knt-navy text-white rounded-lg px-4 py-2 text-xs font-medium disabled:opacity-50"
             >
-              {isPending ? "Saving…" : "Save revision"}
+              {isPending ? "Saving…" : "Save rate"}
             </button>
             {error && <span className="text-xs text-knt-red">{error}</span>}
           </div>

@@ -37,3 +37,14 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans);
 }
+
+/* Numeric fields are keyboard/numpad entry only — no click-up/down spinners. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

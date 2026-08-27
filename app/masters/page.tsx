@@ -11,6 +11,7 @@ import type {
   LaborRateRecord,
   PackingCostRecord,
   TransportationRecord,
+  ExchangeRateRecord,
 } from "@/lib/masters";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +26,10 @@ const TRANSPORT_FIELDS: FieldSpec[] = [
   { key: "vehicleTHB", label: "Vehicle (THB)", step: 1 },
   { key: "fuelTHB", label: "Fuel (THB)", step: 1 },
   { key: "qtyPerTrip", label: "Qty/Trip", step: 1 },
+];
+const EXCHANGE_RATE_FIELDS: FieldSpec[] = [
+  { key: "jpyPerThb", label: "JPY per THB" },
+  { key: "usdPerThb", label: "USD per THB" },
 ];
 
 function toHistory<T extends MasterRecordBase>(
@@ -52,7 +57,7 @@ export default async function MastersPage() {
     listMasterCodes("packing-costs"),
   ]);
 
-  const [materials, packingItems, laborHistory, transportHistory] = await Promise.all([
+  const [materials, packingItems, laborHistory, transportHistory, exchangeRateHistory] = await Promise.all([
     Promise.all(
       materialCodes.map(async (code) => ({
         code,
@@ -71,6 +76,7 @@ export default async function MastersPage() {
     ),
     toHistory<LaborRateRecord>(await listMasterHistory("labor-rates", "default"), LABOR_FIELDS),
     toHistory<TransportationRecord>(await listMasterHistory("transportation", "default"), TRANSPORT_FIELDS),
+    toHistory<ExchangeRateRecord>(await listMasterHistory("exchange-rates", "default"), EXCHANGE_RATE_FIELDS),
   ]);
 
   return (
@@ -133,6 +139,16 @@ export default async function MastersPage() {
               displayLabel="Vehicle / Fuel / Qty per trip"
               fields={TRANSPORT_FIELDS}
               history={transportHistory}
+            />
+          </Section>
+
+          <Section title="Exchange Rates (THB base)">
+            <MasterItem
+              type="exchange-rates"
+              code="default"
+              displayLabel="JPY / USD per THB"
+              fields={EXCHANGE_RATE_FIELDS}
+              history={exchangeRateHistory}
             />
           </Section>
         </div>

@@ -40,11 +40,18 @@ export function laborCostPerPc(labor: LaborSnapshot): number {
   return labor.processes.reduce((sum, p) => sum + processCostPerPc(labor.hourlyChargeTHB, p), 0);
 }
 
+/** Same total as laborCostPerPc, broken out per process for display. */
+export function laborCostByProcess(labor: LaborSnapshot): { name: string; costPerPc: number }[] {
+  return labor.processes.map((p) => ({ name: p.name, costPerPc: round(processCostPerPc(labor.hourlyChargeTHB, p)) }));
+}
+
+export function packingItemCostPerPc(item: { priceTHB: number; qtyPerUnit: number }): number {
+  if (item.qtyPerUnit <= 0) return 0;
+  return item.priceTHB / item.qtyPerUnit;
+}
+
 export function packingCostPerPc(packing: PackingSnapshot): number {
-  return packing.items.reduce((sum, item) => {
-    if (item.qtyPerUnit <= 0) return sum;
-    return sum + item.priceTHB / item.qtyPerUnit;
-  }, 0);
+  return packing.items.reduce((sum, item) => sum + packingItemCostPerPc(item), 0);
 }
 
 export function transportationCostPerPc(transportation: TransportationSnapshot): number {
@@ -88,6 +95,9 @@ export function calculateSummary(inputs: CalcInputs): CalculatedSummary {
 
   const finalPriceToCustomer = inputs.finalPriceToCustomer ?? totalPrice;
 
+  // Material % and Gross Margin % are expressed against the actual price quoted to the
+  // customer (which may be manually overridden away from the calculated totalPrice),
+  // not the internal target price.
   return {
     materialCostPerPc: round(material),
     laborCostPerPc: round(labor),
@@ -97,8 +107,8 @@ export function calculateSummary(inputs: CalcInputs): CalculatedSummary {
     overhead: round(overhead),
     profit: round(profit),
     totalPrice: round(totalPrice),
-    materialPct: totalPrice > 0 ? round(material / totalPrice, 4) : 0,
-    grossMarginPct: totalPrice > 0 ? round((totalPrice - cogs) / totalPrice, 4) : 0,
+    materialPct: finalPriceToCustomer > 0 ? round(material / finalPriceToCustomer, 4) : 0,
+    grossMarginPct: finalPriceToCustomer > 0 ? round((finalPriceToCustomer - cogs) / finalPriceToCustomer, 4) : 0,
     finalPriceToCustomer: round(finalPriceToCustomer),
   };
 }

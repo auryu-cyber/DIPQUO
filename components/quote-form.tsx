@@ -1,8 +1,10 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { calculateSummary } from "@/lib/calc";
+import { calculateSummary, laborCostByProcess, packingItemCostPerPc } from "@/lib/calc";
 import { saveQuoteAction } from "@/app/quotes/actions";
+import { resolveAsOf } from "@/lib/masters-lookup";
+import { formatNumber, formatPercent } from "@/lib/format";
 import type {
   Quote,
   QuoteStatus,
@@ -10,16 +12,75 @@ import type {
   HourlyProcess,
   PerPieceTimeProcess,
   ToolingItem,
+  MaterialSnapshot,
+  LaborSnapshot,
+  ExchangeRateSnapshot,
 } from "@/lib/types";
 import type { QuoteFormMasters } from "@/lib/masters-lookup";
 
 const STATUS_OPTIONS: QuoteStatus[] = ["draft", "pending_approval", "confirmed", "comparison"];
+const PACKING_CODES = ["plastic-bag", "carton-box", "paper-pallet"];
+const DEFAULT_LOSS_RATE = { setting: 0.02, moulding: 0.02, cutting: 0.02, inspection: 0.02 };
 
 type FormState = Omit<Quote, "calculated" | "updatedAt" | "updatedBy">;
 
+function todayStr(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function resolveMaterialAsOf(masters: QuoteFormMasters, code: string, asOf: string) {
+  return resolveAsOf(masters.materials.find((m) => m.code === code)?.history ?? [], asOf);
+}
+
+function resolvePackingAsOf(masters: QuoteFormMasters, code: string, asOf: string) {
+  return resolveAsOf(masters.packingItems.find((p) => p.code === code)?.history ?? [], asOf);
+}
+
+function resolveExchangeSnapshot(
+  masters: QuoteFormMasters,
+  asOf: string
+): { ref: { record: string }; snap: ExchangeRateSnapshot } {
+  const rec = resolveAsOf(masters.exchangeRateHistory, asOf);
+  return {
+    ref: { record: rec ? `exchange-rates/default/${rec.effectiveFrom}` : "" },
+    snap: { jpyPerThb: rec?.jpyPerThb ?? 0, usdPerThb: rec?.usdPerThb ?? 0 },
+  };
+}
+
+/** Labor loss rates for these three processes are not entered directly — they're derived
+ *  live from the Material Cost loss-rate breakdown. Packing keeps its own editable rate. */
+function deriveProcessLossRate(processName: string, material: MaterialSnapshot): number | null {
+  const n = processName.toLowerCase();
+  if (n.includes("dipping")) return 1 - (1 - material.lossRate.setting) * (1 - material.lossRate.moulding);
+  if (n.includes("cutting")) return material.lossRate.cutting;
+  if (n.includes("inspection")) return material.lossRate.inspection;
+  return null;
+}
+
+function withDerivedLossRates(labor: LaborSnapshot, material: MaterialSnapshot): LaborSnapshot {
+  return {
+    ...labor,
+    processes: labor.processes.map((p) => {
+      const derived = deriveProcessLossRate(p.name, material);
+      return derived === null ? p : { ...p, lossRate: derived };
+    }),
+  };
+}
+
+function toFormState(quote: Quote): FormState {
+  // Quote is a structural superset of FormState (adds calculated/updatedAt/updatedBy);
+  // assigning through a variable (not an object literal) skips the excess-property check.
+  return quote;
+}
+
 function emptyForm(masters: QuoteFormMasters): FormState {
+  const asOf = todayStr();
   const firstMaterial = masters.materials[0];
-  const packingByCode = new Map(masters.packingItems.map((p) => [p.code, p.current]));
+  const materialRec = firstMaterial ? resolveMaterialAsOf(masters, firstMaterial.code, asOf) : undefined;
+  const laborRec = resolveAsOf(masters.laborRateHistory, asOf);
+  const transportRec = resolveAsOf(masters.transportationHistory, asOf);
+  const fx = resolveExchangeSnapshot(masters, asOf);
+  const packingResolved = PACKING_CODES.map((code) => resolvePackingAsOf(masters, code, asOf));
 
   return {
     id: "",
@@ -27,41 +88,44 @@ function emptyForm(masters: QuoteFormMasters): FormState {
     productName: "",
     status: "draft",
     monthlyQty: 0,
-    materialRef: {
-      materialCode: firstMaterial?.code ?? "",
-      effectiveFrom: firstMaterial?.current?.effectiveFrom ?? "",
-    },
+    pricingDate: asOf,
+    materialRef: { materialCode: firstMaterial?.code ?? "", effectiveFrom: materialRec?.effectiveFrom ?? "" },
     material: {
-      name: firstMaterial?.current?.displayName ?? "",
-      pricePerKg: firstMaterial?.current?.pricePerKg ?? 0,
+      name: materialRec?.displayName ?? "",
+      pricePerKg: materialRec?.pricePerKg ?? 0,
       weightG: 0,
-      lossRate: { setting: 0.02, moulding: 0.02, cutting: 0.02, inspection: 0.02 },
+      lossRate: { ...DEFAULT_LOSS_RATE },
     },
-    laborRef: { record: masters.laborRate ? `labor-rates/default/${masters.laborRate.effectiveFrom}` : "" },
+    laborRef: { record: laborRec ? `labor-rates/default/${laborRec.effectiveFrom}` : "" },
     labor: {
-      hourlyChargeTHB: masters.laborRate?.hourlyChargeTHB ?? 0,
+      hourlyChargeTHB: laborRec?.hourlyChargeTHB ?? 0,
       processes: [
         { name: "Dipping", qtyPerShot: 0, cycleTimeMin: 1, machines: 1, lossRate: 0.04 } satisfies DippingProcess,
         { name: "Cutting (Manual)", qtyPerHour: 0, lossRate: 0.02 } satisfies HourlyProcess,
         { name: "Inspection", secPerPc: 0, lossRate: 0.02 } satisfies PerPieceTimeProcess,
-        { name: "Packing", secPerPc: 0, lossRate: 0.02 } satisfies PerPieceTimeProcess,
+        { name: "Packing", secPerPc: 0, lossRate: 0.01 } satisfies PerPieceTimeProcess,
       ],
     },
-    packingRef: { records: [] },
+    packingRef: {
+      records: PACKING_CODES.map((code, i) => {
+        const rec = packingResolved[i];
+        return rec ? `packing-costs/${code}/${rec.effectiveFrom}` : "";
+      }),
+    },
     packing: {
-      items: ["plastic-bag", "carton-box", "paper-pallet"].map((code) => {
-        const rec = packingByCode.get(code);
+      items: PACKING_CODES.map((code, i) => {
+        const rec = packingResolved[i];
         return { name: rec?.displayName ?? code, priceTHB: rec?.priceTHB ?? 0, qtyPerUnit: rec?.qtyPerUnit ?? 1 };
       }),
     },
-    transportationRef: {
-      record: masters.transportation ? `transportation/default/${masters.transportation.effectiveFrom}` : "",
-    },
+    transportationRef: { record: transportRec ? `transportation/default/${transportRec.effectiveFrom}` : "" },
     transportation: {
-      vehicleTHB: masters.transportation?.vehicleTHB ?? 0,
-      fuelTHB: masters.transportation?.fuelTHB ?? 0,
-      qtyPerTrip: masters.transportation?.qtyPerTrip ?? 1,
+      vehicleTHB: transportRec?.vehicleTHB ?? 0,
+      fuelTHB: transportRec?.fuelTHB ?? 0,
+      qtyPerTrip: transportRec?.qtyPerTrip ?? 1,
     },
+    exchangeRateRef: fx.ref,
+    exchangeRate: fx.snap,
     tooling: { items: [], customerMarkup: 1.25 },
     overheadRate: 0.1,
     profitRate: 0.5,
@@ -77,35 +141,92 @@ export function QuoteForm({
   initialQuote?: Quote;
   previousSha?: string;
 }) {
-  const [form, setForm] = useState<FormState>(initialQuote ?? emptyForm(masters));
+  const [form, setForm] = useState<FormState>(() => {
+    if (!initialQuote) return emptyForm(masters);
+    const base = toFormState(initialQuote);
+    const pricingDate = base.pricingDate ?? todayStr();
+    const fx = base.exchangeRate ?? resolveExchangeSnapshot(masters, pricingDate).snap;
+    const fxRef = base.exchangeRateRef ?? resolveExchangeSnapshot(masters, pricingDate).ref;
+    return { ...base, pricingDate, exchangeRate: fx, exchangeRateRef: fxRef };
+  });
   const [finalPriceOverride, setFinalPriceOverride] = useState<number | null>(
     initialQuote?.calculated.finalPriceToCustomer ?? null
   );
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
+  const effectiveLabor = useMemo(() => withDerivedLossRates(form.labor, form.material), [form.labor, form.material]);
+  const laborBreakdown = useMemo(() => laborCostByProcess(effectiveLabor), [effectiveLabor]);
+
   const summary = useMemo(
     () =>
       calculateSummary({
         material: form.material,
-        labor: form.labor,
+        labor: effectiveLabor,
         packing: form.packing,
         transportation: form.transportation,
         overheadRate: form.overheadRate,
         profitRate: form.profitRate,
         finalPriceToCustomer: finalPriceOverride ?? undefined,
       }),
-    [form, finalPriceOverride]
+    [form, effectiveLabor, finalPriceOverride]
   );
 
   function selectMaterial(code: string) {
-    const rec = masters.materials.find((m) => m.code === code)?.current;
-    if (!rec) return;
-    setForm((f) => ({
-      ...f,
-      materialRef: { materialCode: code, effectiveFrom: rec.effectiveFrom },
-      material: { ...f.material, name: rec.displayName, pricePerKg: rec.pricePerKg },
-    }));
+    setForm((f) => {
+      const rec = resolveMaterialAsOf(masters, code, f.pricingDate);
+      return {
+        ...f,
+        materialRef: { materialCode: code, effectiveFrom: rec?.effectiveFrom ?? "" },
+        material: rec
+          ? { ...f.material, name: rec.displayName, pricePerKg: rec.pricePerKg, overridden: false }
+          : f.material,
+      };
+    });
+  }
+
+  function changePricingDate(newDate: string) {
+    setForm((f) => {
+      const materialRec = resolveMaterialAsOf(masters, f.materialRef.materialCode, newDate);
+      const laborRec = resolveAsOf(masters.laborRateHistory, newDate);
+      const transportRec = resolveAsOf(masters.transportationHistory, newDate);
+      const fx = resolveExchangeSnapshot(masters, newDate);
+      const packingResolved = PACKING_CODES.map((code) => resolvePackingAsOf(masters, code, newDate));
+
+      return {
+        ...f,
+        pricingDate: newDate,
+        materialRef: {
+          materialCode: f.materialRef.materialCode,
+          effectiveFrom: materialRec?.effectiveFrom ?? f.materialRef.effectiveFrom,
+        },
+        material: materialRec
+          ? { ...f.material, name: materialRec.displayName, pricePerKg: materialRec.pricePerKg, overridden: false }
+          : f.material,
+        laborRef: { record: laborRec ? `labor-rates/default/${laborRec.effectiveFrom}` : f.laborRef.record },
+        labor: laborRec ? { ...f.labor, hourlyChargeTHB: laborRec.hourlyChargeTHB } : f.labor,
+        transportationRef: {
+          record: transportRec ? `transportation/default/${transportRec.effectiveFrom}` : f.transportationRef.record,
+        },
+        transportation: transportRec
+          ? { vehicleTHB: transportRec.vehicleTHB, fuelTHB: transportRec.fuelTHB, qtyPerTrip: transportRec.qtyPerTrip }
+          : f.transportation,
+        packingRef: {
+          records: PACKING_CODES.map((code, i) => {
+            const rec = packingResolved[i];
+            return rec ? `packing-costs/${code}/${rec.effectiveFrom}` : f.packingRef.records[i] ?? "";
+          }),
+        },
+        packing: {
+          items: f.packing.items.map((item, i) => {
+            const rec = packingResolved[i];
+            return rec ? { name: rec.displayName, priceTHB: rec.priceTHB, qtyPerUnit: rec.qtyPerUnit } : item;
+          }),
+        },
+        exchangeRateRef: fx.ref,
+        exchangeRate: fx.snap,
+      };
+    });
   }
 
   function updateProcess(index: number, patch: Record<string, number>) {
@@ -144,11 +265,13 @@ export function QuoteForm({
   function save() {
     setError(null);
     if (!form.id.trim() || !form.productName.trim()) {
-      setError("Product Name is required.");
+      setError("Product ID and Product Name are required.");
       return;
     }
+    const payload = { ...form, labor: effectiveLabor };
+    const renameFrom = initialQuote ? { id: initialQuote.id, variant: initialQuote.variant } : undefined;
     startTransition(async () => {
-      const result = await saveQuoteAction(form, previousSha);
+      const result = await saveQuoteAction(payload, previousSha, renameFrom);
       if (result && !result.ok) {
         setError(result.error ?? "Failed to save.");
       }
@@ -159,6 +282,9 @@ export function QuoteForm({
     (sum, it) => sum + (it.totalTHB ?? (it.qty ?? 0) * (it.unitPriceTHB ?? 0)),
     0
   );
+  const finalPrice = finalPriceOverride ?? summary.finalPriceToCustomer;
+  const monthlySales = finalPrice * form.monthlyQty;
+  const monthlyGrossMargin = (finalPrice - summary.cogs) * form.monthlyQty;
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
@@ -166,7 +292,7 @@ export function QuoteForm({
         <div>
           <div className="text-[11px] text-gray-400">Quotes &nbsp;›&nbsp; {initialQuote ? "Edit" : "New"} {form.id || "quote"}</div>
           <div className="font-heading text-xl font-bold text-knt-navy">
-            {initialQuote ? `Edit Quote — ${form.id}` : "New Quote"}
+            {initialQuote ? `Edit Quote — ${initialQuote.id}` : "New Quote"}
           </div>
         </div>
         <div className="flex items-center gap-4">
@@ -184,12 +310,11 @@ export function QuoteForm({
       <div className="flex-1 flex gap-6 px-8 pb-8 overflow-auto">
         <div className="flex-1 min-w-0 flex flex-col gap-4">
           <Section title="Product Info">
-            <div className="grid grid-cols-4 gap-3.5">
-              <Field label="Product Name / ID">
+            <div className="grid grid-cols-3 gap-3.5">
+              <Field label="Product ID">
                 <input
                   value={form.id}
-                  onChange={(e) => setForm((f) => ({ ...f, id: e.target.value, productName: e.target.value }))}
-                  disabled={Boolean(initialQuote)}
+                  onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
                   className="input"
                   placeholder="F4P0010"
                 />
@@ -198,9 +323,16 @@ export function QuoteForm({
                 <input
                   value={form.variant}
                   onChange={(e) => setForm((f) => ({ ...f, variant: e.target.value }))}
-                  disabled={Boolean(initialQuote)}
                   className="input"
                   placeholder="current"
+                />
+              </Field>
+              <Field label="Product Name">
+                <input
+                  value={form.productName}
+                  onChange={(e) => setForm((f) => ({ ...f, productName: e.target.value }))}
+                  className="input"
+                  placeholder="Product display name"
                 />
               </Field>
               <Field label="Monthly Qty">
@@ -224,6 +356,14 @@ export function QuoteForm({
                   ))}
                 </select>
               </Field>
+              <Field label="Pricing Date (Master Rates as of)">
+                <input
+                  type="date"
+                  value={form.pricingDate}
+                  onChange={(e) => changePricingDate(e.target.value)}
+                  className="input"
+                />
+              </Field>
             </div>
           </Section>
 
@@ -238,7 +378,7 @@ export function QuoteForm({
                   <option value="">Select…</option>
                   {masters.materials.map((m) => (
                     <option key={m.code} value={m.code}>
-                      {m.current?.displayName ?? m.code}
+                      {m.history[0]?.displayName ?? m.code}
                     </option>
                   ))}
                 </select>
@@ -268,50 +408,61 @@ export function QuoteForm({
             <div className="text-[11px] text-gray-500 mb-2">Loss Rate Breakdown</div>
             <div className="grid grid-cols-4 gap-2.5">
               {(["setting", "moulding", "cutting", "inspection"] as const).map((k) => (
-                <Field key={k} label={k[0].toUpperCase() + k.slice(1)}>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={form.material.lossRate[k]}
-                    onChange={(e) =>
-                      setForm((f) => ({
-                        ...f,
-                        material: { ...f.material, lossRate: { ...f.material.lossRate, [k]: Number(e.target.value) } },
-                      }))
-                    }
-                    className="input"
-                  />
-                </Field>
+                <PercentField
+                  key={k}
+                  label={k[0].toUpperCase() + k.slice(1)}
+                  value={form.material.lossRate[k]}
+                  onChange={(v) =>
+                    setForm((f) => ({
+                      ...f,
+                      material: { ...f.material, lossRate: { ...f.material.lossRate, [k]: v } },
+                    }))
+                  }
+                />
               ))}
             </div>
             <div className="mt-3 text-sm font-medium text-knt-navy">
-              Material Cost/pc: {summary.materialCostPerPc.toFixed(3)} THB
+              Material Cost/pc: {formatNumber(summary.materialCostPerPc)} THB
             </div>
           </Section>
 
           <Section title="Labor Cost (by Process)">
             <div className="grid grid-cols-2 gap-3">
-              {form.labor.processes.map((p, i) => (
-                <div key={p.name} className="proc-card">
-                  <div className="text-[12.5px] font-medium text-knt-navy mb-2">{p.name}</div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {"cycleTimeMin" in p && (
-                      <>
-                        <NumField label="Qty/Shot" value={p.qtyPerShot} onChange={(v) => updateProcess(i, { qtyPerShot: v })} />
-                        <NumField label="Cycle Time (min)" value={p.cycleTimeMin} onChange={(v) => updateProcess(i, { cycleTimeMin: v })} />
-                        <NumField label="Machines" value={p.machines} onChange={(v) => updateProcess(i, { machines: v })} />
-                      </>
-                    )}
-                    {"qtyPerHour" in p && (
-                      <NumField label="Qty/Hour" value={p.qtyPerHour} onChange={(v) => updateProcess(i, { qtyPerHour: v })} />
-                    )}
-                    {"secPerPc" in p && (
-                      <NumField label="Time/pc (sec)" value={p.secPerPc} onChange={(v) => updateProcess(i, { secPerPc: v })} />
-                    )}
-                    <NumField label="Loss Rate" value={p.lossRate} step={0.01} onChange={(v) => updateProcess(i, { lossRate: v })} />
+              {form.labor.processes.map((p, i) => {
+                const derived = deriveProcessLossRate(p.name, form.material);
+                return (
+                  <div key={p.name} className="proc-card">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="text-[12.5px] font-medium text-knt-navy">{p.name}</div>
+                      <div className="text-[11px] font-bold text-knt-blue">
+                        {formatNumber(laborBreakdown[i]?.costPerPc ?? 0)} THB/pc
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {"cycleTimeMin" in p && (
+                        <>
+                          <NumField label="Qty/Shot" value={p.qtyPerShot} onChange={(v) => updateProcess(i, { qtyPerShot: v })} />
+                          <NumField label="Cycle Time (min)" value={p.cycleTimeMin} onChange={(v) => updateProcess(i, { cycleTimeMin: v })} />
+                          <NumField label="Machines" value={p.machines} onChange={(v) => updateProcess(i, { machines: v })} />
+                        </>
+                      )}
+                      {"qtyPerHour" in p && (
+                        <NumField label="Qty/Hour" value={p.qtyPerHour} onChange={(v) => updateProcess(i, { qtyPerHour: v })} />
+                      )}
+                      {"secPerPc" in p && (
+                        <NumField label="Time/pc (sec)" value={p.secPerPc} onChange={(v) => updateProcess(i, { secPerPc: v })} />
+                      )}
+                      {derived === null ? (
+                        <PercentField label="Loss Rate" value={p.lossRate} onChange={(v) => updateProcess(i, { lossRate: v })} />
+                      ) : (
+                        <Field label="Loss Rate (from Material)">
+                          <div className="input bg-gray-50 text-gray-500">{formatPercent(derived)}</div>
+                        </Field>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             <div className="grid grid-cols-2 gap-3 mt-3">
               <NumField
@@ -320,7 +471,7 @@ export function QuoteForm({
                 onChange={(v) => setForm((f) => ({ ...f, labor: { ...f.labor, hourlyChargeTHB: v } }))}
               />
               <div className="flex items-end justify-end text-sm font-bold text-knt-navy pb-1.5">
-                Total Labor Cost: {summary.laborCostPerPc.toFixed(3)} THB/pc
+                Total Labor Cost: {formatNumber(summary.laborCostPerPc)} THB/pc
               </div>
             </div>
           </Section>
@@ -328,14 +479,17 @@ export function QuoteForm({
           <div className="flex gap-4">
             <Section title="Packing Cost" className="flex-1">
               {form.packing.items.map((item, i) => (
-                <div key={item.name} className="grid grid-cols-3 gap-2 mb-2 items-end">
+                <div key={item.name} className="grid grid-cols-4 gap-2 mb-2 items-end">
                   <div className="text-xs text-gray-600 col-span-1">{item.name}</div>
                   <NumField label="Price (THB)" value={item.priceTHB} onChange={(v) => updatePackingItem(i, { priceTHB: v })} />
                   <NumField label="Qty/unit" value={item.qtyPerUnit} onChange={(v) => updatePackingItem(i, { qtyPerUnit: v })} />
+                  <div className="text-[11px] text-gray-500 text-right pb-2">
+                    {formatNumber(packingItemCostPerPc(item))} THB/pc
+                  </div>
                 </div>
               ))}
               <div className="text-sm font-bold text-knt-navy mt-2">
-                Total Packing Cost: {summary.packingCostPerPc.toFixed(3)} THB/pc
+                Total Packing Cost: {formatNumber(summary.packingCostPerPc)} THB/pc
               </div>
             </Section>
 
@@ -358,7 +512,7 @@ export function QuoteForm({
                 />
               </div>
               <div className="text-sm font-bold text-knt-navy mt-2">
-                Total Transportation Cost: {summary.transportationCostPerPc.toFixed(3)} THB/pc
+                Total Transportation Cost: {formatNumber(summary.transportationCostPerPc)} THB/pc
               </div>
             </Section>
           </div>
@@ -385,15 +539,21 @@ export function QuoteForm({
             <button onClick={addToolingItem} className="text-xs text-knt-blue mt-1">
               + Add item
             </button>
-            <div className="flex justify-end gap-8 mt-3">
+            <div className="flex justify-end items-end gap-8 mt-3">
+              <NumField
+                label="Customer Markup (×)"
+                value={form.tooling.customerMarkup}
+                step={0.01}
+                onChange={(v) => setForm((f) => ({ ...f, tooling: { ...f.tooling, customerMarkup: v } }))}
+              />
               <div className="text-right">
                 <div className="text-[11px] text-gray-400">Total</div>
-                <div className="text-sm font-bold">{toolingTotal.toLocaleString()} THB</div>
+                <div className="text-sm font-bold">{formatNumber(toolingTotal)} THB</div>
               </div>
               <div className="text-right">
                 <div className="text-[11px] text-gray-400">Customer Price (×{form.tooling.customerMarkup})</div>
                 <div className="text-sm font-bold text-knt-navy">
-                  {(toolingTotal * form.tooling.customerMarkup).toLocaleString()} THB
+                  {formatNumber(toolingTotal * form.tooling.customerMarkup)} THB
                 </div>
               </div>
             </div>
@@ -408,18 +568,12 @@ export function QuoteForm({
             <SumRow label="Packing Cost" value={summary.packingCostPerPc} />
             <SumRow label="Transportation Cost" value={summary.transportationCostPerPc} />
             <SumRow label="COGS" value={summary.cogs} bold />
-            <SumRow label={`OH (${form.overheadRate * 100}%)`} value={summary.overhead} />
-            <SumRow label={`Profit (${form.profitRate * 100}%)`} value={summary.profit} />
+            <SumRow label={`OH (${formatNumber(form.overheadRate * 100, 0)}%)`} value={summary.overhead} />
+            <SumRow label={`Profit (${formatNumber(form.profitRate * 100, 0)}%)`} value={summary.profit} />
             <div className="bg-knt-ivory rounded-[10px] p-3.5 mt-2 flex flex-col gap-1.5">
               <div className="flex justify-between text-xs">
-                <span className="text-gray-500">Total price</span>
-                <span className="font-bold">{summary.totalPrice.toFixed(3)} THB</span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-gray-500">Material % / Gross Margin</span>
-                <span>
-                  {(summary.materialPct * 100).toFixed(1)}% / {(summary.grossMarginPct * 100).toFixed(1)}%
-                </span>
+                <span className="text-gray-500">Target Total Price (calculated)</span>
+                <span className="font-bold">{formatNumber(summary.totalPrice)} THB</span>
               </div>
             </div>
             <div className="bg-knt-navy rounded-xl p-4 mt-2 text-center">
@@ -431,7 +585,25 @@ export function QuoteForm({
                 onChange={(e) => setFinalPriceOverride(Number(e.target.value))}
                 className="w-full bg-transparent text-center text-white font-heading text-2xl font-bold outline-none mt-1"
               />
-              <div className="text-[11px] text-knt-blue-gray">THB / pc</div>
+              <div className="text-[11px] text-knt-blue-gray mb-2">THB / pc</div>
+              <div className="text-[10.5px] text-knt-blue-gray flex justify-center gap-1">
+                <span>≈ {formatNumber(finalPrice * form.exchangeRate.jpyPerThb)} JPY</span>
+                <span>·</span>
+                <span>≈ {formatNumber(finalPrice * form.exchangeRate.usdPerThb)} USD</span>
+              </div>
+              <div className="text-[11px] text-white/90 font-medium mt-2 pt-2 border-t border-white/15">
+                Material {formatPercent(summary.materialPct)} · Gross Margin {formatPercent(summary.grossMarginPct)}
+              </div>
+              <div className="mt-2 pt-2 border-t border-white/15 flex flex-col gap-0.5 text-[10.5px] text-knt-blue-gray">
+                <div className="flex justify-between">
+                  <span>Monthly Sales</span>
+                  <span className="text-white font-medium">{formatNumber(monthlySales)} THB</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Monthly Gross Margin</span>
+                  <span className="text-white font-medium">{formatNumber(monthlyGrossMargin)} THB</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -488,7 +660,33 @@ function NumField({
 }) {
   return (
     <Field label={label}>
-      <input type="number" step={step} value={value} onChange={(e) => onChange(Number(e.target.value))} className="input" />
+      <input
+        type="number"
+        inputMode="decimal"
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="input"
+      />
+    </Field>
+  );
+}
+
+/** A rate stored as a 0-1 fraction, edited on screen as a percentage (e.g. 0.02 shows as 2). */
+function PercentField({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
+  return (
+    <Field label={label}>
+      <div className="relative">
+        <input
+          type="number"
+          inputMode="decimal"
+          step={0.1}
+          value={Math.round(value * 10000) / 100}
+          onChange={(e) => onChange(Number(e.target.value) / 100)}
+          className="input pr-6"
+        />
+        <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">%</span>
+      </div>
     </Field>
   );
 }
@@ -497,7 +695,7 @@ function SumRow({ label, value, bold = false }: { label: string; value: number; 
   return (
     <div className={`flex justify-between text-xs py-1.5 border-b border-gray-100 ${bold ? "font-bold text-knt-navy" : "text-gray-700"}`}>
       <span>{label}</span>
-      <span>{value.toFixed(3)} THB</span>
+      <span>{formatNumber(value)} THB</span>
     </div>
   );
 }

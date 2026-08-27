@@ -63,6 +63,11 @@ export interface ToolingSnapshot {
   customerMarkup: number;
 }
 
+export interface ExchangeRateSnapshot {
+  jpyPerThb: number;
+  usdPerThb: number;
+}
+
 export interface CalculatedSummary {
   materialCostPerPc: number;
   laborCostPerPc: number;
@@ -86,6 +91,9 @@ export interface Quote {
   updatedAt: string;
   updatedBy: string;
 
+  /** The master-data date used to resolve every *Ref below ("as of" date). */
+  pricingDate: string;
+
   materialRef: { materialCode: string; effectiveFrom: string };
   material: MaterialSnapshot;
 
@@ -97,6 +105,9 @@ export interface Quote {
 
   transportationRef: { record: string };
   transportation: TransportationSnapshot;
+
+  exchangeRateRef: { record: string };
+  exchangeRate: ExchangeRateSnapshot;
 
   tooling: ToolingSnapshot;
 

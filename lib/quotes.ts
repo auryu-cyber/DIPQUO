@@ -1,4 +1,4 @@
-import { getJsonFile, putJsonFile } from "@/lib/github";
+import { getJsonFile, putJsonFile, deleteFile } from "@/lib/github";
 import { calculateSummary } from "@/lib/calc";
 import type { Quote, QuoteIndex, QuoteIndexEntry } from "@/lib/types";
 
@@ -30,10 +30,14 @@ export interface SaveQuoteInput {
   quote: Omit<Quote, "calculated" | "updatedAt" | "updatedBy">;
   previousSha?: string;
   updatedBy: string;
+  /** The quote's id/variant before this edit — set when editing an existing quote so a
+   *  change to id/variant is handled as a rename (old file removed) rather than a stray copy. */
+  renameFrom?: { id: string; variant: string };
 }
 
-/** Recomputes the summary, commits the quote file, and keeps index.json in sync. */
-export async function saveQuote({ quote, previousSha, updatedBy }: SaveQuoteInput): Promise<Quote> {
+/** Recomputes the summary, commits the quote file, and keeps index.json in sync.
+ *  Handles a Product ID / Variant rename by writing the new file and removing the old one. */
+export async function saveQuote({ quote, previousSha, updatedBy, renameFrom }: SaveQuoteInput): Promise<Quote> {
   const calculated = calculateSummary({
     material: quote.material,
     labor: quote.labor,
@@ -50,23 +54,41 @@ export async function saveQuote({ quote, previousSha, updatedBy }: SaveQuoteInpu
     calculated,
   };
 
+  const isRename = Boolean(renameFrom && (renameFrom.id !== quote.id || renameFrom.variant !== quote.variant));
   const path = `quotes/${quote.id}/${quote.variant}.json`;
-  const action = previousSha ? "update" : "create";
+  const action = previousSha && !isRename ? "update" : "create";
   await putJsonFile(
     path,
     fullQuote,
     `quote(${quote.id}/${quote.variant}): ${action} by ${updatedBy}`,
     updatedBy,
-    previousSha
+    isRename ? undefined : previousSha
   );
 
-  await upsertIndexEntry(fullQuote, path, updatedBy);
+  if (isRename && renameFrom && previousSha) {
+    const oldPath = `quotes/${renameFrom.id}/${renameFrom.variant}.json`;
+    await deleteFile(
+      oldPath,
+      `quote(${renameFrom.id}/${renameFrom.variant}): renamed to ${quote.id}/${quote.variant} by ${updatedBy}`,
+      previousSha
+    );
+  }
+
+  await upsertIndexEntry(fullQuote, path, updatedBy, isRename ? renameFrom : undefined);
   return fullQuote;
 }
 
-async function upsertIndexEntry(quote: Quote, path: string, updatedBy: string): Promise<void> {
+async function upsertIndexEntry(
+  quote: Quote,
+  path: string,
+  updatedBy: string,
+  removeKey?: { id: string; variant: string }
+): Promise<void> {
   const existing = await getJsonFile<QuoteIndex>("index.json");
-  const quotes = existing?.data.quotes ?? [];
+  let quotes = existing?.data.quotes ?? [];
+  if (removeKey) {
+    quotes = quotes.filter((q) => !(q.id === removeKey.id && q.variant === removeKey.variant));
+  }
   const entry: QuoteIndexEntry = {
     id: quote.id,
     variant: quote.variant,
