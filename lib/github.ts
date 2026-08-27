@@ -11,6 +11,9 @@ function client() {
       "GITHUB_DATA_TOKEN is not set. See .env.example for required environment variables."
     );
   }
+  console.log(
+    `[github] client: owner=${owner} repo=${repo} branch=${branch} tokenLength=${token.length} tokenPrefix=${token.slice(0, 8)}`
+  );
   return new Octokit({ auth: token });
 }
 
@@ -30,6 +33,7 @@ export async function getJsonFile<T>(path: string): Promise<FileResult<T> | null
     const content = Buffer.from(res.data.content, "base64").toString("utf-8");
     return { data: JSON.parse(content) as T, sha: res.data.sha };
   } catch (err: unknown) {
+    logFetchError("getJsonFile", path, err);
     if (isNotFound(err)) return null;
     throw err;
   }
@@ -181,6 +185,14 @@ export class QuoteConflictError extends Error {
 
 function isNotFound(err: unknown): boolean {
   return typeof err === "object" && err !== null && "status" in err && (err as { status: unknown }).status === 404;
+}
+
+/** Temporary diagnostic logging to distinguish "file genuinely absent" from an auth/permission error
+ *  that GitHub also reports as 404 for private repos — visible in Vercel Runtime Logs. */
+function logFetchError(fn: string, path: string, err: unknown): void {
+  const status = typeof err === "object" && err !== null && "status" in err ? (err as { status: unknown }).status : undefined;
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`[github] ${fn}(${path}) owner=${owner} repo=${repo} branch=${branch} status=${status} message=${message}`);
 }
 
 function isConflict(err: unknown): boolean {
