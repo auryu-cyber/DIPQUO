@@ -27,6 +27,15 @@ export async function saveQuoteAction(
   if (!quote.id.trim() || !quote.variant.trim()) {
     return { ok: false, error: "Product ID and Variant are required." };
   }
+  if (!quote.customerName?.trim() || !quote.projectName?.trim()) {
+    return { ok: false, error: "Customer Name and Project Name are required." };
+  }
+  if (quote.projectType === "other" && !quote.projectTypeOther?.trim()) {
+    return { ok: false, error: 'Please describe the project type when "Other" is selected.' };
+  }
+  if (!quote.massProductionStart?.year || !quote.massProductionStart?.period) {
+    return { ok: false, error: "Mass Production Start is required." };
+  }
 
   try {
     await saveQuoteInternal({ quote, previousSha, updatedBy: email, renameFrom });

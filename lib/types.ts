@@ -1,5 +1,14 @@
 export type QuoteStatus = "draft" | "pending_approval" | "confirmed" | "comparison";
 
+export type ProjectType = "new_model" | "switch_from_other" | "other";
+
+export interface MassProductionStart {
+  year: number;
+  granularity: "month" | "quarter" | "half";
+  /** Interpreted per granularity: month 1-12, quarter 1-4, half 1-2. */
+  period: number;
+}
+
 export interface DippingProcess {
   name: string;
   qtyPerShot: number;
@@ -90,6 +99,13 @@ export interface Quote {
   monthlyQty: number;
   updatedAt: string;
   updatedBy: string;
+
+  customerName: string;
+  projectName: string;
+  projectType: ProjectType;
+  /** Required only when projectType is "other". */
+  projectTypeOther?: string;
+  massProductionStart: MassProductionStart;
 
   /** The master-data date used to resolve every *Ref below ("as of" date). */
   pricingDate: string;

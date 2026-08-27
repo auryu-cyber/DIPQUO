@@ -117,6 +117,7 @@ export function QuotesTable({ quotes }: { quotes: QuoteIndexEntry[] }) {
               <Th>Updated</Th>
               <Th>Owner</Th>
               <Th>Status</Th>
+              <th className="w-16" />
             </tr>
           </thead>
           <tbody>
@@ -150,12 +151,20 @@ export function QuotesTable({ quotes }: { quotes: QuoteIndexEntry[] }) {
                       {STATUS_LABEL[q.status] ?? q.status}
                     </span>
                   </Td>
+                  <Td>
+                    <Link
+                      href={`/quotes/new?copyFrom=${encodeURIComponent(`${q.id}/${q.variant}`)}`}
+                      className="text-knt-blue text-[11.5px] font-medium hover:underline whitespace-nowrap"
+                    >
+                      Duplicate
+                    </Link>
+                  </Td>
                 </tr>
               );
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={9} className="text-center text-sm text-gray-400 py-12">
+                <td colSpan={10} className="text-center text-sm text-gray-400 py-12">
                   No quotes yet. Create one to get started.
                 </td>
               </tr>

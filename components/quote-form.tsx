@@ -8,6 +8,8 @@ import { formatNumber, formatPercent } from "@/lib/format";
 import type {
   Quote,
   QuoteStatus,
+  ProjectType,
+  MassProductionStart,
   DippingProcess,
   HourlyProcess,
   PerPieceTimeProcess,
@@ -23,6 +25,22 @@ import type { QuoteFormMasters } from "@/lib/masters-lookup";
 const STATUS_OPTIONS: QuoteStatus[] = ["draft", "pending_approval", "confirmed", "comparison"];
 const PACKING_CODES = ["plastic-bag", "carton-box", "paper-pallet"];
 const DEFAULT_LOSS_RATE = { setting: 0.02, moulding: 0.02, cutting: 0.02, inspection: 0.02 };
+
+const PROJECT_TYPE_OPTIONS: { value: ProjectType; label: string }[] = [
+  { value: "new_model", label: "New Model" },
+  { value: "switch_from_other", label: "Switch from Other Supplier" },
+  { value: "other", label: "Other" },
+];
+const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+function periodOptions(granularity: MassProductionStart["granularity"]): { value: number; label: string }[] {
+  if (granularity === "month") return MONTH_NAMES.map((name, i) => ({ value: i + 1, label: name }));
+  if (granularity === "quarter") return [1, 2, 3, 4].map((q) => ({ value: q, label: `Q${q}` }));
+  return [
+    { value: 1, label: "H1 (Jan–Jun)" },
+    { value: 2, label: "H2 (Jul–Dec)" },
+  ];
+}
 
 type FormState = Omit<Quote, "calculated" | "updatedAt" | "updatedBy">;
 
@@ -171,6 +189,10 @@ function emptyForm(masters: QuoteFormMasters): FormState {
     productName: "",
     status: "draft",
     monthlyQty: 0,
+    customerName: "",
+    projectName: "",
+    projectType: "new_model",
+    massProductionStart: { year: new Date().getFullYear(), granularity: "month", period: new Date().getMonth() + 1 },
     pricingDate: asOf,
     materialRef: { materialCode: firstMaterial?.code ?? "", effectiveFrom: materialRec?.effectiveFrom ?? asOf },
     material: {
@@ -201,7 +223,7 @@ function emptyForm(masters: QuoteFormMasters): FormState {
   };
 }
 
-/** Backfills the per-category effectiveFrom dates for a quote saved before they existed. */
+/** Backfills fields that didn't exist yet on a quote saved by an earlier version of the app. */
 function withDateFallbacks(base: FormState, masters: QuoteFormMasters): FormState {
   const fallback = base.pricingDate ?? todayStr();
   const materialRef = base.materialRef.effectiveFrom ? base.materialRef : { ...base.materialRef, effectiveFrom: fallback };
@@ -224,6 +246,14 @@ function withDateFallbacks(base: FormState, masters: QuoteFormMasters): FormStat
     packingRef,
     exchangeRateRef,
     exchangeRate,
+    customerName: base.customerName ?? "",
+    projectName: base.projectName ?? "",
+    projectType: base.projectType ?? "new_model",
+    massProductionStart: base.massProductionStart ?? {
+      year: new Date().getFullYear(),
+      granularity: "month",
+      period: new Date().getMonth() + 1,
+    },
   };
 }
 
@@ -231,18 +261,31 @@ export function QuoteForm({
   masters,
   initialQuote,
   previousSha,
+  copyFromQuote,
 }: {
   masters: QuoteFormMasters;
   initialQuote?: Quote;
   previousSha?: string;
+  /** Present only on the New Quote page when arriving via "Duplicate" — pre-fills the
+   *  form from this quote's content but always as a brand-new, unsaved quote. */
+  copyFromQuote?: Quote;
 }) {
   const [state, setState, undoState, redoState] = useUndoableState<{
     form: FormState;
     finalPriceOverride: number | null;
-  }>(() => ({
-    form: initialQuote ? withDateFallbacks(toFormState(initialQuote), masters) : emptyForm(masters),
-    finalPriceOverride: initialQuote?.calculated.finalPriceToCustomer ?? null,
-  }));
+  }>(() => {
+    if (initialQuote) {
+      return {
+        form: withDateFallbacks(toFormState(initialQuote), masters),
+        finalPriceOverride: initialQuote.calculated.finalPriceToCustomer ?? null,
+      };
+    }
+    if (copyFromQuote) {
+      const copied = withDateFallbacks(toFormState(copyFromQuote), masters);
+      return { form: { ...copied, id: "", variant: "current", status: "draft" }, finalPriceOverride: null };
+    }
+    return { form: emptyForm(masters), finalPriceOverride: null };
+  });
   const { form, finalPriceOverride } = state;
 
   function setForm(updater: FormState | ((f: FormState) => FormState)) {
@@ -385,6 +428,18 @@ export function QuoteForm({
       setError("Product ID and Product Name are required.");
       return;
     }
+    if (!form.customerName.trim() || !form.projectName.trim()) {
+      setError("Customer Name and Project Name are required.");
+      return;
+    }
+    if (form.projectType === "other" && !form.projectTypeOther?.trim()) {
+      setError('Please describe the project type when "Other" is selected.');
+      return;
+    }
+    if (!form.massProductionStart.year || !form.massProductionStart.period) {
+      setError("Mass Production Start is required.");
+      return;
+    }
     const payload = { ...form, labor: effectiveLabor };
     const renameFrom = initialQuote ? { id: initialQuote.id, variant: initialQuote.variant } : undefined;
     startTransition(async () => {
@@ -426,6 +481,13 @@ export function QuoteForm({
 
       <div className="flex-1 flex gap-6 px-8 pb-8 overflow-auto">
         <div className="flex-1 min-w-0 flex flex-col gap-4">
+          {copyFromQuote && (
+            <div className="rounded-[12px] border border-knt-blue/30 bg-knt-blue/[0.08] px-4 py-3 text-[12.5px] text-knt-navy">
+              Copied from <strong>{copyFromQuote.id}/{copyFromQuote.variant}</strong> as a new quote — the original is
+              unchanged. Enter a new Product ID (and Variant, if needed) below before saving.
+            </div>
+          )}
+
           <Section title="Product Info">
             <div className="grid grid-cols-3 gap-3.5">
               <Field label="Product ID">
@@ -469,6 +531,102 @@ export function QuoteForm({
                   {STATUS_OPTIONS.map((s) => (
                     <option key={s} value={s}>
                       {s}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+          </Section>
+
+          <Section title="Project Info">
+            <div className="grid grid-cols-3 gap-3.5">
+              <Field label="Customer Name *">
+                <input
+                  value={form.customerName}
+                  onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
+                  className="input"
+                  placeholder="Customer company name"
+                />
+              </Field>
+              <Field label="Project Name *">
+                <input
+                  value={form.projectName}
+                  onChange={(e) => setForm((f) => ({ ...f, projectName: e.target.value }))}
+                  className="input"
+                  placeholder="Project name"
+                />
+              </Field>
+              <Field label="Project Type *">
+                <select
+                  value={form.projectType}
+                  onChange={(e) => setForm((f) => ({ ...f, projectType: e.target.value as ProjectType }))}
+                  className="input"
+                >
+                  {PROJECT_TYPE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              {form.projectType === "other" && (
+                <div className="col-span-3">
+                  <Field label="Other — Please Describe *">
+                    <input
+                      value={form.projectTypeOther ?? ""}
+                      onChange={(e) => setForm((f) => ({ ...f, projectTypeOther: e.target.value }))}
+                      className="input"
+                      placeholder="Describe the project type"
+                    />
+                  </Field>
+                </div>
+              )}
+
+              <Field label="Mass Production Start — Year *">
+                <input
+                  type="number"
+                  value={form.massProductionStart.year}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      massProductionStart: { ...f.massProductionStart, year: Number(e.target.value) },
+                    }))
+                  }
+                  className="input"
+                />
+              </Field>
+              <Field label="Granularity">
+                <select
+                  value={form.massProductionStart.granularity}
+                  onChange={(e) => {
+                    const granularity = e.target.value as MassProductionStart["granularity"];
+                    setForm((f) => ({
+                      ...f,
+                      massProductionStart: { ...f.massProductionStart, granularity, period: periodOptions(granularity)[0].value },
+                    }));
+                  }}
+                  className="input"
+                >
+                  <option value="month">Month</option>
+                  <option value="quarter">Quarter</option>
+                  <option value="half">Half Year</option>
+                </select>
+              </Field>
+              <Field label="Period *">
+                <select
+                  value={form.massProductionStart.period}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      massProductionStart: { ...f.massProductionStart, period: Number(e.target.value) },
+                    }))
+                  }
+                  className="input"
+                >
+                  {periodOptions(form.massProductionStart.granularity).map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
                     </option>
                   ))}
                 </select>
