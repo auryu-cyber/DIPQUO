@@ -12,6 +12,7 @@ import type {
   QuoteStatus,
   ProjectType,
   OrderStatus,
+  Currency,
   MassProductionStart,
   DippingProcess,
   HourlyProcess,
@@ -40,6 +41,7 @@ const ORDER_STATUS_OPTIONS: { value: OrderStatus; label: string }[] = [
   { value: "lost", label: "Lost" },
   { value: "on_hold", label: "On Hold" },
 ];
+const CURRENCY_OPTIONS: Currency[] = ["THB", "JPY", "USD"];
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
 function periodOptions(granularity: MassProductionStart["granularity"]): { value: number; label: string }[] {
@@ -204,6 +206,7 @@ function emptyForm(masters: QuoteFormMasters): FormState {
     massProductionStart: { year: new Date().getFullYear(), granularity: "month", period: new Date().getMonth() + 1 },
     inquiryDate: asOf,
     orderStatus: "in_negotiation",
+    customerCurrency: "THB",
     pricingDate: asOf,
     materialRef: { materialCode: firstMaterial?.code ?? "", effectiveFrom: materialRec?.effectiveFrom ?? asOf },
     material: {
@@ -267,6 +270,7 @@ function withDateFallbacks(base: FormState, masters: QuoteFormMasters): FormStat
     },
     inquiryDate: base.inquiryDate ?? fallback,
     orderStatus: base.orderStatus ?? "in_negotiation",
+    customerCurrency: base.customerCurrency ?? "THB",
   };
 }
 
@@ -473,6 +477,17 @@ export function QuoteForm({
   const finalPrice = finalPriceOverride ?? summary.finalPriceToCustomer;
   const monthlySales = finalPrice * form.monthlyQty;
   const monthlyGrossMargin = (finalPrice - summary.cogs) * form.monthlyQty;
+  const finalPriceJpy = finalPrice * form.exchangeRate.jpyPerThb;
+  const finalPriceUsd = finalPrice * form.exchangeRate.usdPerThb;
+
+  // THB is the canonical stored currency (finalPriceOverride). Editing the JPY or USD
+  // row converts back to THB via the current exchange rate so all three stay in sync.
+  function setFinalPriceJpy(v: number) {
+    if (form.exchangeRate.jpyPerThb > 0) setFinalPriceOverride(v / form.exchangeRate.jpyPerThb);
+  }
+  function setFinalPriceUsd(v: number) {
+    if (form.exchangeRate.usdPerThb > 0) setFinalPriceOverride(v / form.exchangeRate.usdPerThb);
+  }
 
   return (
     <div className="flex flex-col h-screen overflow-hidden">
@@ -560,6 +575,8 @@ export function QuoteForm({
               <Field label="Mass Production Start — Year *">
                 <FormattedNumberInput
                   value={form.massProductionStart.year}
+                  decimals={0}
+                  grouping={false}
                   onChange={(v) =>
                     setForm((f) => ({ ...f, massProductionStart: { ...f.massProductionStart, year: v } }))
                   }
@@ -896,16 +913,42 @@ export function QuoteForm({
                 <span className="font-bold">{formatNumber(summary.totalPrice)} THB</span>
               </div>
             </div>
-            <div className="bg-knt-navy rounded-xl p-4 mt-2 text-center">
-              <div className="text-[11px] text-knt-blue-gray">Final Price to Customer</div>
-              <FormattedNumberInput
-                value={finalPriceOverride ?? summary.finalPriceToCustomer}
-                onChange={setFinalPriceOverride}
-                className="w-full bg-transparent text-center text-white font-heading text-2xl font-bold outline-none mt-1"
-              />
-              <div className="text-[11px] text-knt-blue-gray mb-2">THB / pc</div>
+            <div className="bg-knt-navy rounded-xl p-4 mt-2">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-[11px] text-knt-blue-gray">Final Price to Customer</div>
+                <select
+                  value={form.customerCurrency}
+                  onChange={(e) => setForm((f) => ({ ...f, customerCurrency: e.target.value as Currency }))}
+                  className="bg-white/10 border border-white/25 rounded-md px-1.5 py-0.5 text-white text-[10px]"
+                >
+                  {CURRENCY_OPTIONS.map((c) => (
+                    <option key={c} value={c} className="text-black">
+                      Quoted in {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-              <div className="flex items-center justify-between text-[10px] text-knt-blue-gray">
+              <CurrencyRow
+                label="THB"
+                value={finalPrice}
+                onChange={setFinalPriceOverride}
+                highlighted={form.customerCurrency === "THB"}
+              />
+              <CurrencyRow
+                label="JPY"
+                value={finalPriceJpy}
+                onChange={setFinalPriceJpy}
+                highlighted={form.customerCurrency === "JPY"}
+              />
+              <CurrencyRow
+                label="USD"
+                value={finalPriceUsd}
+                onChange={setFinalPriceUsd}
+                highlighted={form.customerCurrency === "USD"}
+              />
+
+              <div className="flex items-center justify-between text-[10px] text-knt-blue-gray mt-2">
                 <span>Exchange Rate as of</span>
                 <input
                   type="date"
@@ -914,16 +957,11 @@ export function QuoteForm({
                   className="bg-white/10 border border-white/25 rounded-md px-1.5 py-0.5 text-white text-[10px]"
                 />
               </div>
-              <div className="text-[10px] text-knt-blue-gray text-right mb-1">
+              <div className="text-[10px] text-knt-blue-gray text-right">
                 1 THB = {formatNumber(form.exchangeRate.jpyPerThb, 4)} JPY / {formatNumber(form.exchangeRate.usdPerThb, 4)} USD
               </div>
-              <div className="text-[10.5px] text-knt-blue-gray flex justify-center gap-1">
-                <span>≈ {formatNumber(finalPrice * form.exchangeRate.jpyPerThb)} JPY</span>
-                <span>·</span>
-                <span>≈ {formatNumber(finalPrice * form.exchangeRate.usdPerThb)} USD</span>
-              </div>
 
-              <div className="text-[11px] text-white/90 font-medium mt-2 pt-2 border-t border-white/15">
+              <div className="text-[11px] text-white/90 font-medium text-center mt-2 pt-2 border-t border-white/15">
                 Material {formatPercent(summary.materialPct)} · Gross Margin {formatPercent(summary.grossMarginPct)}
               </div>
               <div className="mt-2 pt-2 border-t border-white/15 flex flex-col gap-0.5 text-[10.5px] text-knt-blue-gray">
@@ -1031,6 +1069,35 @@ function PercentField({ label, value, onChange }: { label: string; value: number
         <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-400 pointer-events-none">%</span>
       </div>
     </Field>
+  );
+}
+
+/** One editable currency line in the Final Price box — THB, JPY, and USD are all shown at
+ *  the same size and are cross-editable (each writes back through the THB override). */
+function CurrencyRow({
+  label,
+  value,
+  onChange,
+  highlighted = false,
+}: {
+  label: string;
+  value: number;
+  onChange: (v: number) => void;
+  highlighted?: boolean;
+}) {
+  return (
+    <div
+      className={`flex items-center justify-between gap-2 rounded-lg px-2.5 py-1.5 mb-1 ${
+        highlighted ? "bg-white/15 border border-white/30" : "border border-transparent"
+      }`}
+    >
+      <span className="text-[11px] text-knt-blue-gray w-9 shrink-0">{label}</span>
+      <FormattedNumberInput
+        value={value}
+        onChange={onChange}
+        className="flex-1 min-w-0 bg-transparent text-right text-white font-heading text-xl font-bold outline-none"
+      />
+    </div>
   );
 }
 

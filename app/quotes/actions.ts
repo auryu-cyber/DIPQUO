@@ -108,3 +108,63 @@ export async function saveQuoteAction(
 
   redirect(`/quotes/${quote.id}/${quote.variant}`);
 }
+
+export interface DuplicateQuotesResult {
+  ok: boolean;
+  error?: string;
+  created?: { id: string; variant: string }[];
+}
+
+/** Duplicates each selected quote in place as a new draft (unique variant, no link back
+ *  to the source), so the caller can then open and edit each copy individually. */
+export async function duplicateQuotesAction(idVariantPairs: string[]): Promise<DuplicateQuotesResult> {
+  const session = await getServerSession(authOptions);
+  const email = session?.user?.email;
+  if (!email) {
+    return { ok: false, error: "Not signed in." };
+  }
+  if (idVariantPairs.length === 0) {
+    return { ok: false, error: "No quotes selected." };
+  }
+
+  const created: { id: string; variant: string }[] = [];
+  try {
+    for (let i = 0; i < idVariantPairs.length; i++) {
+      const [id, variant] = idVariantPairs[i].split("/");
+      if (!id || !variant) continue;
+      const existing = await getQuote(id, variant);
+      if (!existing) continue;
+
+      // Quote is a structural superset of the save payload type; assigning through a
+      // variable (not an object literal) skips the excess-property check for calculated/
+      // updatedAt/updatedBy, which the spread below then naturally leaves out.
+      const quotePayload: Omit<Quote, "calculated" | "updatedAt" | "updatedBy"> = existing.quote;
+      const newVariant = `${variant}-copy-${Date.now().toString(36)}${i}`;
+      const saved = await saveQuoteInternal({
+        quote: { ...quotePayload, variant: newVariant, status: "draft" },
+        updatedBy: email,
+      });
+      created.push({ id: saved.id, variant: saved.variant });
+    }
+
+    await appendLog(
+      "activity",
+      {
+        type: "activity",
+        at: new Date().toISOString(),
+        user: email,
+        action: "created",
+        target: created.map((c) => `${c.id}/${c.variant}`).join(", "),
+        detail: `Duplicated ${created.length} quote(s) from selection`,
+      },
+      email
+    ).catch((err) => console.error("Failed to log bulk duplicate", err));
+
+    revalidatePath("/quotes");
+  } catch (err) {
+    console.error("Failed to duplicate quotes", err);
+    return { ok: false, error: "Failed to duplicate one or more quotes. Please try again.", created };
+  }
+
+  return { ok: true, created };
+}

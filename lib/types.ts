@@ -4,6 +4,8 @@ export type ProjectType = "new_model" | "switch_from_other" | "other";
 
 export type OrderStatus = "in_negotiation" | "ordered" | "lost" | "on_hold";
 
+export type Currency = "THB" | "JPY" | "USD";
+
 export interface MassProductionStart {
   year: number;
   granularity: "month" | "quarter" | "half";
@@ -111,6 +113,8 @@ export interface Quote {
   /** The date the customer's quote request was received. */
   inquiryDate: string;
   orderStatus: OrderStatus;
+  /** The currency actually quoted/answered to the customer. */
+  customerCurrency: Currency;
 
   /** The master-data date used to resolve every *Ref below ("as of" date). */
   pricingDate: string;

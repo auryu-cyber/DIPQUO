@@ -10,14 +10,22 @@ export function FormattedNumberInput({
   onChange,
   className = "input",
   placeholder,
+  decimals = 2,
+  grouping = true,
 }: {
   value: number;
   onChange: (v: number) => void;
   className?: string;
   placeholder?: string;
+  /** Decimal places shown when not focused. */
+  decimals?: number;
+  /** Whether to show a thousands separator — turn off for things like a bare year (2026, not 2,026). */
+  grouping?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState("");
+
+  const display = grouping ? formatNumber(value, decimals) : value.toFixed(decimals);
 
   return (
     <input
@@ -25,7 +33,7 @@ export function FormattedNumberInput({
       inputMode="decimal"
       placeholder={placeholder}
       className={className}
-      value={editing ? text : formatNumber(value)}
+      value={editing ? text : display}
       onFocus={() => {
         setEditing(true);
         setText(value === 0 ? "" : String(value));

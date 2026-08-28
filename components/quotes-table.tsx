@@ -1,8 +1,9 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { duplicateQuotesAction } from "@/app/quotes/actions";
 import type { QuoteIndexEntry } from "@/lib/types";
 import type { CustomerRecord } from "@/lib/customers";
 
@@ -35,6 +36,8 @@ export function QuotesTable({ quotes, customers = [] }: { quotes: QuoteIndexEntr
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openPopover, setOpenPopover] = useState<string | null>(null);
+  const [duplicateError, setDuplicateError] = useState<string | null>(null);
+  const [isDuplicating, startDuplicating] = useTransition();
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -96,6 +99,21 @@ export function QuotesTable({ quotes, customers = [] }: { quotes: QuoteIndexEntr
     window.location.href = `/api/export/csv${query}`;
   }
 
+  function duplicateSelected() {
+    setDuplicateError(null);
+    const ids = selectedIds();
+    if (ids.length === 0) return;
+    startDuplicating(async () => {
+      const res = await duplicateQuotesAction(ids);
+      if (!res.ok) {
+        setDuplicateError(res.error ?? "Failed to duplicate.");
+        return;
+      }
+      setSelected(new Set());
+      router.refresh();
+    });
+  }
+
   return (
     <div className="flex flex-col h-screen">
       <div className="flex items-center justify-between px-8 pt-6 pb-4">
@@ -122,6 +140,13 @@ export function QuotesTable({ quotes, customers = [] }: { quotes: QuoteIndexEntr
           </div>
         )}
         <button
+          onClick={duplicateSelected}
+          disabled={selected.size === 0 || isDuplicating}
+          className="flex items-center gap-1.5 bg-white text-knt-navy border border-knt-pale-blue rounded-lg px-3.5 py-2 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {isDuplicating ? "Duplicating…" : "Duplicate Selected"}
+        </button>
+        <button
           onClick={expandToSpreadsheet}
           disabled={selected.size === 0}
           className="flex items-center gap-1.5 bg-knt-navy text-white rounded-lg px-3.5 py-2 text-xs font-medium disabled:opacity-40 disabled:cursor-not-allowed"
@@ -135,6 +160,12 @@ export function QuotesTable({ quotes, customers = [] }: { quotes: QuoteIndexEntr
           Export
         </button>
       </div>
+
+      {duplicateError && (
+        <div className="mx-8 mb-3 rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-xs text-red-700">
+          {duplicateError}
+        </div>
+      )}
 
       <div className="flex-1 mx-8 mb-6 bg-white rounded-[14px] border border-gray-100 overflow-auto">
         <table className="w-full border-collapse">
