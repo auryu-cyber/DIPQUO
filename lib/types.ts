@@ -2,11 +2,13 @@ export type QuoteStatus = "draft" | "pending_approval" | "confirmed" | "comparis
 
 export type ProjectType = "new_model" | "switch_from_other" | "other";
 
+export type OrderStatus = "in_negotiation" | "ordered" | "lost" | "on_hold";
+
 export interface MassProductionStart {
   year: number;
   granularity: "month" | "quarter" | "half";
-  /** Interpreted per granularity: month 1-12, quarter 1-4, half 1-2. */
-  period: number;
+  /** Interpreted per granularity: month 1-12, quarter 1-4, half 1-2. Omitted when not yet decided. */
+  period?: number;
 }
 
 export interface DippingProcess {
@@ -106,6 +108,9 @@ export interface Quote {
   /** Required only when projectType is "other". */
   projectTypeOther?: string;
   massProductionStart: MassProductionStart;
+  /** The date the customer's quote request was received. */
+  inquiryDate: string;
+  orderStatus: OrderStatus;
 
   /** The master-data date used to resolve every *Ref below ("as of" date). */
   pricingDate: string;
@@ -129,6 +134,9 @@ export interface Quote {
 
   overheadRate: number;
   profitRate: number;
+  /** Manual override of the calculated total price. When unset, calculated.finalPriceToCustomer
+   *  equals the calculated total (COGS + OH + profit). */
+  finalPriceOverride?: number;
 
   calculated: CalculatedSummary;
 }
@@ -137,6 +145,8 @@ export interface QuoteIndexEntry {
   id: string;
   variant: string;
   productName: string;
+  customerName: string;
+  inquiryDate: string;
   material: string;
   monthlyQty: number;
   finalPriceToCustomer: number;

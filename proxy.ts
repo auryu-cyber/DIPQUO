@@ -1,7 +1,7 @@
 import { withAuth } from "next-auth/middleware";
 import { NextResponse } from "next/server";
 
-const ADMIN_ONLY_PREFIXES = ["/logs", "/api/logs", "/masters"];
+const ADMIN_ONLY_PREFIXES = ["/logs", "/api/logs", "/masters", "/customers"];
 
 export default withAuth(
   function middleware(req) {

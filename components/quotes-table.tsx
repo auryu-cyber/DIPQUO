@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { QuoteIndexEntry } from "@/lib/types";
+import type { CustomerRecord } from "@/lib/customers";
 
 const STATUS_STYLE: Record<string, string> = {
   confirmed: "bg-knt-blue/[0.14] text-[#0f6fa8]",
@@ -23,18 +24,49 @@ function rowKey(q: QuoteIndexEntry) {
   return `${q.id}::${q.variant}`;
 }
 
-export function QuotesTable({ quotes }: { quotes: QuoteIndexEntry[] }) {
+function sortTime(q: QuoteIndexEntry): number {
+  const d = q.inquiryDate || q.updatedAt;
+  const t = new Date(d).getTime();
+  return Number.isNaN(t) ? 0 : t;
+}
+
+export function QuotesTable({ quotes, customers = [] }: { quotes: QuoteIndexEntry[]; customers?: CustomerRecord[] }) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [openPopover, setOpenPopover] = useState<string | null>(null);
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return quotes;
     return quotes.filter(
-      (q) => q.productName.toLowerCase().includes(term) || q.material.toLowerCase().includes(term)
+      (q) =>
+        q.productName.toLowerCase().includes(term) ||
+        q.material.toLowerCase().includes(term) ||
+        q.customerName?.toLowerCase().includes(term)
     );
   }, [quotes, search]);
+
+  // Grouped by customer, newest inquiry date first — both the group order and the
+  // quotes within each group.
+  const groups = useMemo(() => {
+    const byCustomer = new Map<string, QuoteIndexEntry[]>();
+    for (const q of filtered) {
+      const key = q.customerName || "(No Customer)";
+      if (!byCustomer.has(key)) byCustomer.set(key, []);
+      byCustomer.get(key)!.push(q);
+    }
+    const result = Array.from(byCustomer.entries()).map(([customer, qs]) => {
+      const sorted = [...qs].sort((a, b) => sortTime(b) - sortTime(a));
+      return { customer, quotes: sorted, latest: sortTime(sorted[0]) };
+    });
+    result.sort((a, b) => b.latest - a.latest);
+    return result;
+  }, [filtered]);
+
+  function customerRecord(name: string): CustomerRecord | undefined {
+    return customers.find((c) => c.customerName.toLowerCase() === name.toLowerCase());
+  }
 
   function toggle(key: string) {
     setSelected((prev) => {
@@ -80,8 +112,8 @@ export function QuotesTable({ quotes }: { quotes: QuoteIndexEntry[] }) {
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by product or material"
-          className="w-72 rounded-[9px] border border-knt-pale-blue bg-white px-3.5 py-2 text-xs outline-none focus:border-knt-blue"
+          placeholder="Search by customer, product, or material"
+          className="w-80 rounded-[9px] border border-knt-pale-blue bg-white px-3.5 py-2 text-xs outline-none focus:border-knt-blue"
         />
         <div className="flex-1" />
         {selected.size > 0 && (
@@ -114,57 +146,99 @@ export function QuotesTable({ quotes }: { quotes: QuoteIndexEntry[] }) {
               <Th>Monthly Qty</Th>
               <Th>Unit Price (THB)</Th>
               <Th>Gross Margin</Th>
+              <Th>Inquiry Date</Th>
               <Th>Updated</Th>
               <Th>Owner</Th>
               <Th>Status</Th>
-              <th className="w-16" />
+              <th className="w-20" />
             </tr>
           </thead>
           <tbody>
-            {filtered.map((q) => {
-              const key = rowKey(q);
-              const checked = selected.has(key);
+            {groups.map(({ customer, quotes: groupQuotes }) => {
+              const record = customerRecord(customer);
+              const popoverKey = customer;
               return (
-                <tr key={key} className={checked ? "bg-knt-blue/[0.06]" : ""}>
-                  <Td>
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => toggle(key)}
-                      className="w-[15px] h-[15px] accent-[#41B6E6]"
-                    />
-                  </Td>
-                  <Td>
-                    <Link href={`/quotes/${q.id}/${q.variant}`} className="font-medium text-knt-navy hover:underline">
-                      {q.productName}
-                      {q.variant !== "current" ? ` (${q.variant})` : ""}
-                    </Link>
-                  </Td>
-                  <Td>{q.material}</Td>
-                  <Td>{q.monthlyQty.toLocaleString()} pcs</Td>
-                  <Td className="font-medium">{q.finalPriceToCustomer.toFixed(2)}</Td>
-                  <Td>{(q.grossMarginPct * 100).toFixed(1)}%</Td>
-                  <Td className="text-gray-400">{new Date(q.updatedAt).toLocaleDateString()}</Td>
-                  <Td>{q.updatedBy}</Td>
-                  <Td>
-                    <span className={`text-[11px] px-2.5 py-1 rounded-full ${STATUS_STYLE[q.status] ?? ""}`}>
-                      {STATUS_LABEL[q.status] ?? q.status}
-                    </span>
-                  </Td>
-                  <Td>
-                    <Link
-                      href={`/quotes/new?copyFrom=${encodeURIComponent(`${q.id}/${q.variant}`)}`}
-                      className="text-knt-blue text-[11.5px] font-medium hover:underline whitespace-nowrap"
-                    >
-                      Duplicate
-                    </Link>
-                  </Td>
-                </tr>
+                <Fragment key={customer}>
+                  <tr className="bg-knt-pale-blue/40">
+                    <td colSpan={11} className="px-3.5 py-2 relative">
+                      <button
+                        onClick={() => setOpenPopover((k) => (k === popoverKey ? null : popoverKey))}
+                        className="font-heading text-[13px] font-bold text-knt-navy hover:underline"
+                      >
+                        {customer}
+                      </button>
+                      <span className="ml-2 text-[11px] text-gray-500">
+                        {groupQuotes.length} quote{groupQuotes.length === 1 ? "" : "s"}
+                      </span>
+                      {openPopover === popoverKey && (
+                        <div className="absolute z-10 top-full left-3.5 mt-1 w-64 bg-white border border-gray-200 rounded-lg shadow-lg p-3 text-xs text-gray-700">
+                          {record ? (
+                            <>
+                              <div className="mb-1">
+                                <span className="text-gray-400">Industry:</span> {record.industry || "-"}
+                              </div>
+                              <div className="mb-1">
+                                <span className="text-gray-400">Business Type:</span> {record.businessType || "-"}
+                              </div>
+                              <div>
+                                <span className="text-gray-400">Product:</span> {record.product || "-"}
+                              </div>
+                            </>
+                          ) : (
+                            <div className="text-gray-400">No Customer Master record found for this name.</div>
+                          )}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                  {groupQuotes.map((q) => {
+                    const key = rowKey(q);
+                    const checked = selected.has(key);
+                    return (
+                      <tr key={key} className={checked ? "bg-knt-blue/[0.06]" : ""}>
+                        <Td>
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggle(key)}
+                            className="w-[15px] h-[15px] accent-[#41B6E6]"
+                          />
+                        </Td>
+                        <Td>
+                          <Link href={`/quotes/${q.id}/${q.variant}`} className="font-medium text-knt-navy hover:underline">
+                            {q.productName}
+                            {q.variant !== "current" ? ` (${q.variant})` : ""}
+                          </Link>
+                        </Td>
+                        <Td>{q.material}</Td>
+                        <Td>{q.monthlyQty.toLocaleString()} pcs</Td>
+                        <Td className="font-medium">{q.finalPriceToCustomer.toFixed(2)}</Td>
+                        <Td>{(q.grossMarginPct * 100).toFixed(1)}%</Td>
+                        <Td className="text-gray-400">{q.inquiryDate ? new Date(q.inquiryDate).toLocaleDateString() : "-"}</Td>
+                        <Td className="text-gray-400">{new Date(q.updatedAt).toLocaleDateString()}</Td>
+                        <Td>{q.updatedBy}</Td>
+                        <Td>
+                          <span className={`text-[11px] px-2.5 py-1 rounded-full ${STATUS_STYLE[q.status] ?? ""}`}>
+                            {STATUS_LABEL[q.status] ?? q.status}
+                          </span>
+                        </Td>
+                        <Td>
+                          <Link
+                            href={`/quotes/new?copyFrom=${encodeURIComponent(`${q.id}/${q.variant}`)}`}
+                            className="inline-flex items-center gap-1 bg-white text-knt-navy border border-knt-pale-blue rounded-md px-2.5 py-1 text-[11px] font-medium hover:bg-knt-pale-blue/30 whitespace-nowrap"
+                          >
+                            Duplicate
+                          </Link>
+                        </Td>
+                      </tr>
+                    );
+                  })}
+                </Fragment>
               );
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={10} className="text-center text-sm text-gray-400 py-12">
+                <td colSpan={11} className="text-center text-sm text-gray-400 py-12">
                   No quotes yet. Create one to get started.
                 </td>
               </tr>

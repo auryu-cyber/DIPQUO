@@ -1,17 +1,21 @@
 import { listQuoteIndex } from "@/lib/quotes";
+import { listCustomers } from "@/lib/customers";
 import { AppShell } from "@/components/app-shell";
 import { QuotesTable } from "@/components/quotes-table";
 import type { QuoteIndexEntry } from "@/lib/types";
+import type { CustomerRecord } from "@/lib/customers";
 
 export const dynamic = "force-dynamic";
 
 export default async function QuotesPage() {
   let quotes: QuoteIndexEntry[];
+  let customers: CustomerRecord[];
   let loadError: string | null = null;
   try {
-    quotes = await listQuoteIndex();
+    [quotes, customers] = await Promise.all([listQuoteIndex(), listCustomers()]);
   } catch (err) {
     quotes = [];
+    customers = [];
     loadError = err instanceof Error ? err.message : String(err);
   }
 
@@ -22,7 +26,7 @@ export default async function QuotesPage() {
           Failed to load quotes from GitHub: {loadError}
         </div>
       )}
-      <QuotesTable quotes={quotes} />
+      <QuotesTable quotes={quotes} customers={customers} />
     </AppShell>
   );
 }

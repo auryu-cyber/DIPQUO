@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { href: "/quotes", label: "Quotes" },
   { href: "/quotes/new", label: "New Quote" },
   { href: "/masters", label: "Master Data", adminOnly: true },
+  { href: "/customers", label: "Customers", adminOnly: true },
   { href: "/logs", label: "Activity Log", adminOnly: true },
 ];
 

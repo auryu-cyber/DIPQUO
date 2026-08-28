@@ -45,6 +45,7 @@ export async function saveQuote({ quote, previousSha, updatedBy, renameFrom }: S
     transportation: quote.transportation,
     overheadRate: quote.overheadRate,
     profitRate: quote.profitRate,
+    finalPriceToCustomer: quote.finalPriceOverride,
   });
 
   const fullQuote: Quote = {
@@ -93,6 +94,8 @@ async function upsertIndexEntry(
     id: quote.id,
     variant: quote.variant,
     productName: quote.productName,
+    customerName: quote.customerName,
+    inquiryDate: quote.inquiryDate,
     material: quote.material.name,
     monthlyQty: quote.monthlyQty,
     finalPriceToCustomer: quote.calculated.finalPriceToCustomer,

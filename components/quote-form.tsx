@@ -1,14 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { calculateSummary, laborCostByProcess, packingItemCostPerPc } from "@/lib/calc";
 import { saveQuoteAction } from "@/app/quotes/actions";
 import { resolveAsOf } from "@/lib/masters-lookup";
 import { formatNumber, formatPercent } from "@/lib/format";
+import { FormattedNumberInput } from "@/components/formatted-number-input";
 import type {
   Quote,
   QuoteStatus,
   ProjectType,
+  OrderStatus,
   MassProductionStart,
   DippingProcess,
   HourlyProcess,
@@ -30,6 +33,12 @@ const PROJECT_TYPE_OPTIONS: { value: ProjectType; label: string }[] = [
   { value: "new_model", label: "New Model" },
   { value: "switch_from_other", label: "Switch from Other Supplier" },
   { value: "other", label: "Other" },
+];
+const ORDER_STATUS_OPTIONS: { value: OrderStatus; label: string }[] = [
+  { value: "in_negotiation", label: "In Negotiation" },
+  { value: "ordered", label: "Ordered" },
+  { value: "lost", label: "Lost" },
+  { value: "on_hold", label: "On Hold" },
 ];
 const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -193,6 +202,8 @@ function emptyForm(masters: QuoteFormMasters): FormState {
     projectName: "",
     projectType: "new_model",
     massProductionStart: { year: new Date().getFullYear(), granularity: "month", period: new Date().getMonth() + 1 },
+    inquiryDate: asOf,
+    orderStatus: "in_negotiation",
     pricingDate: asOf,
     materialRef: { materialCode: firstMaterial?.code ?? "", effectiveFrom: materialRec?.effectiveFrom ?? asOf },
     material: {
@@ -254,6 +265,8 @@ function withDateFallbacks(base: FormState, masters: QuoteFormMasters): FormStat
       granularity: "month",
       period: new Date().getMonth() + 1,
     },
+    inquiryDate: base.inquiryDate ?? fallback,
+    orderStatus: base.orderStatus ?? "in_negotiation",
   };
 }
 
@@ -277,12 +290,15 @@ export function QuoteForm({
     if (initialQuote) {
       return {
         form: withDateFallbacks(toFormState(initialQuote), masters),
-        finalPriceOverride: initialQuote.calculated.finalPriceToCustomer ?? null,
+        finalPriceOverride: initialQuote.finalPriceOverride ?? null,
       };
     }
     if (copyFromQuote) {
       const copied = withDateFallbacks(toFormState(copyFromQuote), masters);
-      return { form: { ...copied, id: "", variant: "current", status: "draft" }, finalPriceOverride: null };
+      return {
+        form: { ...copied, id: "", variant: "current", status: "draft" },
+        finalPriceOverride: copyFromQuote.finalPriceOverride ?? null,
+      };
     }
     return { form: emptyForm(masters), finalPriceOverride: null };
   });
@@ -436,11 +452,11 @@ export function QuoteForm({
       setError('Please describe the project type when "Other" is selected.');
       return;
     }
-    if (!form.massProductionStart.year || !form.massProductionStart.period) {
-      setError("Mass Production Start is required.");
+    if (!form.massProductionStart.year) {
+      setError("Mass Production Start Year is required.");
       return;
     }
-    const payload = { ...form, labor: effectiveLabor };
+    const payload = { ...form, labor: effectiveLabor, finalPriceOverride: finalPriceOverride ?? undefined };
     const renameFrom = initialQuote ? { id: initialQuote.id, variant: initialQuote.variant } : undefined;
     startTransition(async () => {
       const result = await saveQuoteAction(payload, previousSha, renameFrom);
@@ -469,6 +485,14 @@ export function QuoteForm({
         </div>
         <div className="flex items-center gap-4">
           {error && <div className="text-xs text-knt-red">{error}</div>}
+          {initialQuote && (
+            <Link
+              href={`/quotes/new?copyFrom=${encodeURIComponent(`${initialQuote.id}/${initialQuote.variant}`)}`}
+              className="flex items-center gap-2 bg-white text-knt-navy border border-knt-pale-blue rounded-[9px] px-4 py-2.5 text-[13px] font-medium"
+            >
+              Duplicate this Quote
+            </Link>
+          )}
           <button
             onClick={save}
             disabled={isPending}
@@ -487,56 +511,6 @@ export function QuoteForm({
               unchanged. Enter a new Product ID (and Variant, if needed) below before saving.
             </div>
           )}
-
-          <Section title="Product Info">
-            <div className="grid grid-cols-3 gap-3.5">
-              <Field label="Product ID">
-                <input
-                  value={form.id}
-                  onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
-                  className="input"
-                  placeholder="F4P0010"
-                />
-              </Field>
-              <Field label="Variant">
-                <input
-                  value={form.variant}
-                  onChange={(e) => setForm((f) => ({ ...f, variant: e.target.value }))}
-                  className="input"
-                  placeholder="current"
-                />
-              </Field>
-              <Field label="Product Name">
-                <input
-                  value={form.productName}
-                  onChange={(e) => setForm((f) => ({ ...f, productName: e.target.value }))}
-                  className="input"
-                  placeholder="Product display name"
-                />
-              </Field>
-              <Field label="Monthly Qty">
-                <input
-                  type="number"
-                  value={form.monthlyQty}
-                  onChange={(e) => setForm((f) => ({ ...f, monthlyQty: Number(e.target.value) }))}
-                  className="input"
-                />
-              </Field>
-              <Field label="Status">
-                <select
-                  value={form.status}
-                  onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as QuoteStatus }))}
-                  className="input"
-                >
-                  {STATUS_OPTIONS.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-          </Section>
 
           <Section title="Project Info">
             <div className="grid grid-cols-3 gap-3.5">
@@ -584,16 +558,11 @@ export function QuoteForm({
               )}
 
               <Field label="Mass Production Start — Year *">
-                <input
-                  type="number"
+                <FormattedNumberInput
                   value={form.massProductionStart.year}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      massProductionStart: { ...f.massProductionStart, year: Number(e.target.value) },
-                    }))
+                  onChange={(v) =>
+                    setForm((f) => ({ ...f, massProductionStart: { ...f.massProductionStart, year: v } }))
                   }
-                  className="input"
                 />
               </Field>
               <Field label="Granularity">
@@ -603,7 +572,7 @@ export function QuoteForm({
                     const granularity = e.target.value as MassProductionStart["granularity"];
                     setForm((f) => ({
                       ...f,
-                      massProductionStart: { ...f.massProductionStart, granularity, period: periodOptions(granularity)[0].value },
+                      massProductionStart: { ...f.massProductionStart, granularity, period: undefined },
                     }));
                   }}
                   className="input"
@@ -613,20 +582,92 @@ export function QuoteForm({
                   <option value="half">Half Year</option>
                 </select>
               </Field>
-              <Field label="Period *">
+              <Field label="Period">
                 <select
-                  value={form.massProductionStart.period}
-                  onChange={(e) =>
+                  value={form.massProductionStart.period ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
                     setForm((f) => ({
                       ...f,
-                      massProductionStart: { ...f.massProductionStart, period: Number(e.target.value) },
-                    }))
-                  }
+                      massProductionStart: { ...f.massProductionStart, period: v === "" ? undefined : Number(v) },
+                    }));
+                  }}
                   className="input"
                 >
+                  <option value="">Not yet decided</option>
                   {periodOptions(form.massProductionStart.granularity).map((o) => (
                     <option key={o.value} value={o.value}>
                       {o.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Inquiry Date">
+                <input
+                  type="date"
+                  value={form.inquiryDate}
+                  onChange={(e) => setForm((f) => ({ ...f, inquiryDate: e.target.value }))}
+                  className="input"
+                />
+              </Field>
+              <Field label="Order Status">
+                <select
+                  value={form.orderStatus}
+                  onChange={(e) => setForm((f) => ({ ...f, orderStatus: e.target.value as OrderStatus }))}
+                  className="input"
+                >
+                  {ORDER_STATUS_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+          </Section>
+
+          <Section title="Product Info">
+            <div className="grid grid-cols-3 gap-3.5">
+              <Field label="Product ID">
+                <input
+                  value={form.id}
+                  onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
+                  className="input"
+                  placeholder="F4P0010"
+                />
+              </Field>
+              <Field label="Variant">
+                <input
+                  value={form.variant}
+                  onChange={(e) => setForm((f) => ({ ...f, variant: e.target.value }))}
+                  className="input"
+                  placeholder="current"
+                />
+              </Field>
+              <Field label="Product Name">
+                <input
+                  value={form.productName}
+                  onChange={(e) => setForm((f) => ({ ...f, productName: e.target.value }))}
+                  className="input"
+                  placeholder="Product display name"
+                />
+              </Field>
+              <Field label="Monthly Qty">
+                <FormattedNumberInput
+                  value={form.monthlyQty}
+                  onChange={(v) => setForm((f) => ({ ...f, monthlyQty: v }))}
+                />
+              </Field>
+              <Field label="Status">
+                <select
+                  value={form.status}
+                  onChange={(e) => setForm((f) => ({ ...f, status: e.target.value as QuoteStatus }))}
+                  className="input"
+                >
+                  {STATUS_OPTIONS.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
                     </option>
                   ))}
                 </select>
@@ -654,24 +695,17 @@ export function QuoteForm({
                 </select>
               </Field>
               <Field label="Material Price (THB/kg)">
-                <input
-                  type="number"
+                <FormattedNumberInput
                   value={form.material.pricePerKg}
-                  onChange={(e) =>
-                    setForm((f) => ({
-                      ...f,
-                      material: { ...f.material, pricePerKg: Number(e.target.value), overridden: true },
-                    }))
+                  onChange={(v) =>
+                    setForm((f) => ({ ...f, material: { ...f.material, pricePerKg: v, overridden: true } }))
                   }
-                  className="input"
                 />
               </Field>
               <Field label="Weight (g/pc)">
-                <input
-                  type="number"
+                <FormattedNumberInput
                   value={form.material.weightG}
-                  onChange={(e) => setForm((f) => ({ ...f, material: { ...f.material, weightG: Number(e.target.value) } }))}
-                  className="input"
+                  onChange={(v) => setForm((f) => ({ ...f, material: { ...f.material, weightG: v } }))}
                 />
               </Field>
             </div>
@@ -830,7 +864,6 @@ export function QuoteForm({
               <NumField
                 label="Customer Markup (×)"
                 value={form.tooling.customerMarkup}
-                step={0.01}
                 onChange={(v) => setForm((f) => ({ ...f, tooling: { ...f.tooling, customerMarkup: v } }))}
               />
               <div className="text-right">
@@ -865,11 +898,9 @@ export function QuoteForm({
             </div>
             <div className="bg-knt-navy rounded-xl p-4 mt-2 text-center">
               <div className="text-[11px] text-knt-blue-gray">Final Price to Customer</div>
-              <input
-                type="number"
-                step="0.01"
+              <FormattedNumberInput
                 value={finalPriceOverride ?? summary.finalPriceToCustomer}
-                onChange={(e) => setFinalPriceOverride(Number(e.target.value))}
+                onChange={setFinalPriceOverride}
                 className="w-full bg-transparent text-center text-white font-heading text-2xl font-bold outline-none mt-1"
               />
               <div className="text-[11px] text-knt-blue-gray mb-2">THB / pc</div>
@@ -976,27 +1007,10 @@ function InlineDateField({ value, onChange }: { value: string; onChange: (v: str
   );
 }
 
-function NumField({
-  label,
-  value,
-  onChange,
-  step = 1,
-}: {
-  label: string;
-  value: number;
-  onChange: (v: number) => void;
-  step?: number;
-}) {
+function NumField({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) {
   return (
     <Field label={label}>
-      <input
-        type="number"
-        inputMode="decimal"
-        step={step}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="input"
-      />
+      <FormattedNumberInput value={value} onChange={onChange} />
     </Field>
   );
 }
