@@ -96,6 +96,22 @@ function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Fallback storage id derived from the product name, used only when F-D CODE is left blank. */
+function slugify(text: string): string {
+  const slug = text
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+  return slug || `quote-${Date.now()}`;
+}
+
+/** The F-D CODE field is "F-D" (fixed) + up to 4 digits, stored directly as the quote id
+ *  (e.g. "F-D0005"). Legacy ids that don't follow this pattern are shown as-is. */
+function fdCodeDigits(id: string): string {
+  return id.startsWith("F-D") ? id.slice(3) : id;
+}
+
 function resolveMaterialAsOf(masters: QuoteFormMasters, code: string, asOf: string) {
   return resolveAsOf(masters.materials.find((m) => m.code === code)?.history ?? [], asOf);
 }
@@ -337,6 +353,23 @@ export function QuoteForm({
   const [error, setError] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
+  // Dates actually registered in Master Data for each category, so "Rate as of" only
+  // offers periods that really exist there instead of an arbitrary free date picker.
+  const materialDateOptions = useMemo(
+    () => masters.materials.find((m) => m.code === form.materialRef.materialCode)?.history.map((h) => h.effectiveFrom) ?? [],
+    [masters, form.materialRef.materialCode]
+  );
+  const laborDateOptions = useMemo(() => masters.laborRateHistory.map((h) => h.effectiveFrom), [masters]);
+  const transportationDateOptions = useMemo(() => masters.transportationHistory.map((h) => h.effectiveFrom), [masters]);
+  const exchangeRateDateOptions = useMemo(() => masters.exchangeRateHistory.map((h) => h.effectiveFrom), [masters]);
+  const packingDateOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const code of PACKING_CODES) {
+      for (const h of masters.packingItems.find((p) => p.code === code)?.history ?? []) set.add(h.effectiveFrom);
+    }
+    return Array.from(set).sort().reverse();
+  }, [masters]);
+
   const effectiveLabor = useMemo(() => withDerivedLossRates(form.labor, form.material), [form.labor, form.material]);
   const laborBreakdown = useMemo(() => laborCostByProcess(effectiveLabor), [effectiveLabor]);
 
@@ -444,8 +477,12 @@ export function QuoteForm({
 
   function save() {
     setError(null);
-    if (!form.id.trim() || !form.productName.trim()) {
-      setError("Product ID and Product Name are required.");
+    if (!form.productName.trim()) {
+      setError("Product Name is required.");
+      return;
+    }
+    if (!form.variant.trim()) {
+      setError("Variant is required.");
       return;
     }
     if (!form.customerName.trim() || !form.projectName.trim()) {
@@ -460,7 +497,15 @@ export function QuoteForm({
       setError("Mass Production Start Year is required.");
       return;
     }
-    const payload = { ...form, labor: effectiveLabor, finalPriceOverride: finalPriceOverride ?? undefined };
+    // F-D CODE is optional — fall back to a name-derived id so the quote still has a
+    // valid storage key.
+    const effectiveId = form.id.trim() || slugify(form.productName);
+    const payload = {
+      ...form,
+      id: effectiveId,
+      labor: effectiveLabor,
+      finalPriceOverride: finalPriceOverride ?? undefined,
+    };
     const renameFrom = initialQuote ? { id: initialQuote.id, variant: initialQuote.variant } : undefined;
     startTransition(async () => {
       const result = await saveQuoteAction(payload, previousSha, renameFrom);
@@ -493,7 +538,9 @@ export function QuoteForm({
     <div className="flex flex-col h-screen overflow-hidden">
       <div className="flex items-center justify-between px-8 pt-6 pb-3">
         <div>
-          <div className="text-[11px] text-gray-400">Quotes &nbsp;›&nbsp; {initialQuote ? "Edit" : "New"} {form.id || "quote"}</div>
+          <div className="text-[11px] text-gray-400">
+            Quotes &nbsp;›&nbsp; {initialQuote ? "Edit" : "New"} {form.id || form.productName || "quote"}
+          </div>
           <div className="font-heading text-xl font-bold text-knt-navy">
             {initialQuote ? `Edit Quote — ${initialQuote.id}` : "New Quote"}
           </div>
@@ -523,7 +570,7 @@ export function QuoteForm({
           {copyFromQuote && (
             <div className="rounded-[12px] border border-knt-blue/30 bg-knt-blue/[0.08] px-4 py-3 text-[12.5px] text-knt-navy">
               Copied from <strong>{copyFromQuote.id}/{copyFromQuote.variant}</strong> as a new quote — the original is
-              unchanged. Enter a new Product ID (and Variant, if needed) below before saving.
+              unchanged. Set a new F-D CODE or Variant below before saving so it doesn&rsquo;t collide with the original.
             </div>
           )}
 
@@ -646,12 +693,27 @@ export function QuoteForm({
 
           <Section title="Product Info">
             <div className="grid grid-cols-3 gap-3.5">
-              <Field label="Product ID">
+              <Field label="F-D CODE">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[13px] text-gray-500 font-medium shrink-0">F-D</span>
+                  <input
+                    value={fdCodeDigits(form.id)}
+                    onChange={(e) => {
+                      const digits = e.target.value.replace(/\D/g, "").slice(0, 4);
+                      setForm((f) => ({ ...f, id: digits ? `F-D${digits}` : "" }));
+                    }}
+                    maxLength={4}
+                    placeholder="0005"
+                    className="input"
+                  />
+                </div>
+              </Field>
+              <Field label="Product Name *">
                 <input
-                  value={form.id}
-                  onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
+                  value={form.productName}
+                  onChange={(e) => setForm((f) => ({ ...f, productName: e.target.value }))}
                   className="input"
-                  placeholder="F4P0010"
+                  placeholder="Product display name"
                 />
               </Field>
               <Field label="Variant">
@@ -661,14 +723,9 @@ export function QuoteForm({
                   className="input"
                   placeholder="current"
                 />
-              </Field>
-              <Field label="Product Name">
-                <input
-                  value={form.productName}
-                  onChange={(e) => setForm((f) => ({ ...f, productName: e.target.value }))}
-                  className="input"
-                  placeholder="Product display name"
-                />
+                <div className="text-[10px] text-gray-400 mt-1">
+                  Groups multiple versions of the same quote (e.g. &ldquo;current&rdquo;, &ldquo;alt-material&rdquo;) so they can be compared side by side.
+                </div>
               </Field>
               <Field label="Monthly Qty">
                 <FormattedNumberInput
@@ -694,7 +751,9 @@ export function QuoteForm({
 
           <Section
             title="Material Cost"
-            right={<InlineDateField value={form.materialRef.effectiveFrom} onChange={changeMaterialDate} />}
+            right={
+              <RateDateSelect value={form.materialRef.effectiveFrom} options={materialDateOptions} onChange={changeMaterialDate} />
+            }
           >
             <div className="grid grid-cols-3 gap-3.5 mb-4">
               <Field label="Material (from master)">
@@ -749,7 +808,7 @@ export function QuoteForm({
 
           <Section
             title="Labor Cost (by Process)"
-            right={<InlineDateField value={form.laborRef.effectiveFrom} onChange={changeLaborDate} />}
+            right={<RateDateSelect value={form.laborRef.effectiveFrom} options={laborDateOptions} onChange={changeLaborDate} />}
           >
             <div className="grid grid-cols-2 gap-3">
               {form.labor.processes.map((p, i) => {
@@ -804,7 +863,9 @@ export function QuoteForm({
             <Section
               title="Packing Cost"
               className="flex-1"
-              right={<InlineDateField value={form.packingRef.effectiveFrom} onChange={changePackingDate} />}
+              right={
+                <RateDateSelect value={form.packingRef.effectiveFrom} options={packingDateOptions} onChange={changePackingDate} />
+              }
             >
               {form.packing.items.map((item, i) => (
                 <div key={item.name} className="grid grid-cols-4 gap-2 mb-2 items-end">
@@ -824,7 +885,13 @@ export function QuoteForm({
             <Section
               title="Transportation Cost"
               className="flex-1"
-              right={<InlineDateField value={form.transportationRef.effectiveFrom} onChange={changeTransportationDate} />}
+              right={
+                <RateDateSelect
+                  value={form.transportationRef.effectiveFrom}
+                  options={transportationDateOptions}
+                  onChange={changeTransportationDate}
+                />
+              }
             >
               <div className="grid grid-cols-3 gap-2">
                 <NumField
@@ -950,12 +1017,22 @@ export function QuoteForm({
 
               <div className="flex items-center justify-between text-[10px] text-knt-blue-gray mt-2">
                 <span>Exchange Rate as of</span>
-                <input
-                  type="date"
+                <select
                   value={form.exchangeRateRef.effectiveFrom}
                   onChange={(e) => changeExchangeRateDate(e.target.value)}
                   className="bg-white/10 border border-white/25 rounded-md px-1.5 py-0.5 text-white text-[10px]"
-                />
+                >
+                  {!exchangeRateDateOptions.includes(form.exchangeRateRef.effectiveFrom) && (
+                    <option value={form.exchangeRateRef.effectiveFrom} className="text-black">
+                      {form.exchangeRateRef.effectiveFrom || "No rate registered"}
+                    </option>
+                  )}
+                  {exchangeRateDateOptions.map((d) => (
+                    <option key={d} value={d} className="text-black">
+                      {d}
+                    </option>
+                  ))}
+                </select>
               </div>
               <div className="text-[10px] text-knt-blue-gray text-right">
                 1 THB = {formatNumber(form.exchangeRate.jpyPerThb, 4)} JPY / {formatNumber(form.exchangeRate.usdPerThb, 4)} USD
@@ -1030,17 +1107,25 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-/** Compact date picker used in section headers to pick which period's master rate to use. */
-function InlineDateField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+/** Section-header picker for which period's master rate to use — options are the dates
+ *  actually registered in Master Data for that category, not an arbitrary free date. */
+function RateDateSelect({ value, options, onChange }: { value: string; options: string[]; onChange: (v: string) => void }) {
+  const hasValue = options.includes(value);
   return (
     <label className="flex items-center gap-1.5 text-[10.5px] text-gray-400">
       Rate as of
-      <input
-        type="date"
+      <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="border border-knt-pale-blue rounded-md px-1.5 py-1 text-[11px] text-gray-700"
-      />
+      >
+        {!hasValue && <option value={value}>{value || "No rate registered"}</option>}
+        {options.map((d) => (
+          <option key={d} value={d}>
+            {d}
+          </option>
+        ))}
+      </select>
     </label>
   );
 }

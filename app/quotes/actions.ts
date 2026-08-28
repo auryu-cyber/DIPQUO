@@ -55,8 +55,13 @@ export async function saveQuoteAction(
   if (!email) {
     return { ok: false, error: "Not signed in." };
   }
-  if (!quote.id.trim() || !quote.variant.trim()) {
-    return { ok: false, error: "Product ID and Variant are required." };
+  if (!quote.productName.trim() || !quote.variant.trim()) {
+    return { ok: false, error: "Product Name and Variant are required." };
+  }
+  if (!quote.id.trim()) {
+    // The client always derives a fallback id from the product name when F-D CODE is
+    // left blank; a blank id here means it was called some other way.
+    return { ok: false, error: "Could not determine a storage id for this quote." };
   }
   if (!quote.customerName?.trim() || !quote.projectName?.trim()) {
     return { ok: false, error: "Customer Name and Project Name are required." };
