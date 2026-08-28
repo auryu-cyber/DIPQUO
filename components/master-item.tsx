@@ -8,7 +8,12 @@ import type { MasterType } from "@/lib/masters";
 export interface FieldSpec {
   key: string;
   label: string;
+  /** Input step increment (e.g. 1 for whole-count fields like Qty). */
   step?: number;
+  /** Decimal places shown in the history table. Defaults to 2 — independent of `step`,
+   *  which is about input increments, not display precision (a rate like 62.5 THB/h
+   *  must not be rounded to 63 just because its step is 1). */
+  decimals?: number;
 }
 
 export interface HistoryEntry {
@@ -216,7 +221,7 @@ export function MasterItem({
                     {hasDisplayName && <td className="px-2.5 py-1.5">{h.displayName}</td>}
                     {fields.map((f) => (
                       <td key={f.key} className="text-right px-2.5 py-1.5">
-                        {formatNumber(h.values[f.key] ?? 0, f.step && f.step >= 1 ? 0 : 2)}
+                        {formatNumber(h.values[f.key] ?? 0, f.decimals ?? 2)}
                       </td>
                     ))}
                     <td className="px-2.5 py-1.5 text-gray-500">{h.recordedBy}</td>

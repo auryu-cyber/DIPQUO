@@ -16,20 +16,20 @@ import type {
 
 export const dynamic = "force-dynamic";
 
-const MATERIAL_FIELDS: FieldSpec[] = [{ key: "pricePerKg", label: "Price (THB/kg)" }];
-const LABOR_FIELDS: FieldSpec[] = [{ key: "hourlyChargeTHB", label: "Hourly Charge (THB/h)", step: 1 }];
+const MATERIAL_FIELDS: FieldSpec[] = [{ key: "pricePerKg", label: "Price (THB/kg)", decimals: 2 }];
+const LABOR_FIELDS: FieldSpec[] = [{ key: "hourlyChargeTHB", label: "Hourly Charge (THB/h)", step: 1, decimals: 2 }];
 const PACKING_FIELDS: FieldSpec[] = [
-  { key: "priceTHB", label: "Price (THB)" },
-  { key: "qtyPerUnit", label: "Qty/Unit", step: 1 },
+  { key: "priceTHB", label: "Price (THB)", decimals: 2 },
+  { key: "qtyPerUnit", label: "Qty/Unit", step: 1, decimals: 0 },
 ];
 const TRANSPORT_FIELDS: FieldSpec[] = [
-  { key: "vehicleTHB", label: "Vehicle (THB)", step: 1 },
-  { key: "fuelTHB", label: "Fuel (THB)", step: 1 },
-  { key: "qtyPerTrip", label: "Qty/Trip", step: 1 },
+  { key: "vehicleTHB", label: "Vehicle (THB)", step: 1, decimals: 2 },
+  { key: "fuelTHB", label: "Fuel (THB)", step: 1, decimals: 2 },
+  { key: "qtyPerTrip", label: "Qty/Trip", step: 1, decimals: 0 },
 ];
 const EXCHANGE_RATE_FIELDS: FieldSpec[] = [
-  { key: "jpyPerThb", label: "JPY per THB" },
-  { key: "usdPerThb", label: "USD per THB" },
+  { key: "jpyPerThb", label: "JPY per THB", decimals: 4 },
+  { key: "usdPerThb", label: "USD per THB", decimals: 4 },
 ];
 
 function toHistory<T extends MasterRecordBase>(
