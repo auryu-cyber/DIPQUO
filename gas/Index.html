@@ -1,0 +1,271 @@
+<title>DIP Quotation System</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: 'Noto Sans JP', 'Segoe UI', sans-serif; background: #fbfced; color: #454142; font-size: 13px; }
+  a { color: inherit; text-decoration: none; }
+  .knt-navy { color: #002d72; }
+  #layout { display: flex; min-height: 100vh; }
+  #sidebar { width: 220px; flex-shrink: 0; background: #002d72; color: #fff; display: flex; flex-direction: column; padding: 16px; }
+  #sidebar .brand { display: flex; align-items: center; gap: 10px; padding: 8px; margin-bottom: 20px; }
+  #sidebar .brand-badge { border: 2px solid #fff; border-radius: 10px; width: 40px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; }
+  #sidebar .brand-title { font-weight: 700; font-size: 13px; }
+  #sidebar nav { display: flex; flex-direction: column; gap: 4px; }
+  #sidebar nav a { padding: 10px 12px; border-radius: 10px; font-size: 13px; color: #dee2ec; }
+  #sidebar nav a.active { background: rgba(255,255,255,0.18); color: #fff; font-weight: 500; }
+  #sidebar nav a:hover { background: rgba(255,255,255,0.1); }
+  #sidebar .user-box { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1); font-size: 11px; color: #dee2ec; }
+  #main { flex: 1; min-width: 0; padding: 24px 32px; overflow-x: auto; }
+  h1 { font-size: 22px; margin: 0 0 16px; color: #002d72; }
+  .section { background: #fff; border: 1px solid #f1f1f1; border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+  .section-title { font-size: 14px; font-weight: 700; color: #002d72; margin-bottom: 12px; display: flex; align-items: center; justify-content: space-between; }
+  .grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+  .field label { display: block; font-size: 11px; color: #6b7280; margin-bottom: 4px; }
+  .field .hint { font-size: 10px; color: #9ca3af; margin-top: 4px; }
+  .input, select.input, textarea.input {
+    width: 100%; border: 1.5px solid #dee2ec; border-radius: 8px; padding: 8px 10px; font-size: 13px; background: #fff; font-family: inherit;
+  }
+  .input:focus, select.input:focus { outline: none; border-color: #41b6e6; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border-radius: 9px; padding: 9px 18px; font-size: 13px; font-weight: 500; border: none; cursor: pointer; }
+  .btn-primary { background: #002d72; color: #fff; }
+  .btn-accent { background: #41b6e6; color: #fff; }
+  .btn-outline { background: #fff; color: #002d72; border: 1px solid #dee2ec; }
+  .btn-link { background: none; border: none; color: #41b6e6; font-size: 12px; cursor: pointer; padding: 0; }
+  .btn-danger-link { background: none; border: none; color: #f16667; font-size: 12px; cursor: pointer; padding: 0; }
+  .btn[disabled] { opacity: .4; cursor: not-allowed; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; font-size: 11px; font-weight: 500; color: #6b7280; padding: 9px 12px; border-bottom: 1px solid #dee2ec; }
+  td { padding: 10px 12px; border-bottom: 1px solid #f2f2f2; }
+  .badge { font-size: 10.5px; padding: 3px 9px; border-radius: 999px; }
+  .badge-admin { color: #8c756a; background: #fbfced; border: 1px solid #dee2ec; }
+  .group-row td { background: #eef1f8; font-weight: 700; color: #002d72; font-size: 13px; }
+  .proc-card { border: 1.5px solid #eef0f3; border-radius: 10px; padding: 12px; background: #fbfcfe; }
+  .proc-title { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 12.5px; font-weight: 500; color: #002d72; }
+  .cost-chip { font-size: 11px; font-weight: 700; color: #41b6e6; }
+  .num-suffix { position: relative; }
+  .num-suffix span { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); font-size: 11px; color: #9ca3af; pointer-events: none; }
+  .summary-box { background: #fff; border: 1px solid #f1f1f1; border-radius: 14px; padding: 18px; position: sticky; top: 12px; }
+  .sum-row { display: flex; justify-content: space-between; font-size: 12px; padding: 6px 0; border-bottom: 1px solid #f2f2f2; color: #374151; }
+  .sum-row.bold { font-weight: 700; color: #002d72; }
+  .ivory-box { background: #fbfced; border-radius: 10px; padding: 14px; margin: 10px 0; }
+  .price-box { background: #002d72; border-radius: 12px; padding: 16px; color: #fff; margin-top: 10px; }
+  .price-box .row-between { display: flex; justify-content: space-between; align-items: center; font-size: 10.5px; color: #b3cbd8; }
+  .currency-row { display: flex; align-items: center; gap: 8px; border-radius: 8px; padding: 6px 10px; margin-bottom: 4px; }
+  .currency-row.highlight { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); }
+  .currency-row label { width: 34px; font-size: 11px; color: #b3cbd8; flex-shrink: 0; }
+  .currency-row input { flex: 1; min-width: 0; background: transparent; border: none; color: #fff; text-align: right; font-size: 19px; font-weight: 700; font-family: inherit; }
+  .currency-row input:focus { outline: none; }
+  .dark-select { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.25); color: #fff; border-radius: 6px; padding: 3px 6px; font-size: 10px; }
+  .dark-select option { color: #000; }
+  .rate-date-select { font-size: 10.5px; color: #6b7280; display: flex; align-items: center; gap: 6px; }
+  .rate-date-select select { border: 1px solid #dee2ec; border-radius: 6px; padding: 4px 6px; font-size: 11px; color: #374151; }
+  .rate-date-select.dark-rate { color: #b3cbd8; }
+  .rate-date-select.dark-rate select.dark-select { padding: 3px 6px; font-size: 10px; }
+  .banner { border-radius: 12px; padding: 12px 16px; font-size: 12.5px; margin-bottom: 14px; }
+  .banner-info { background: rgba(65,182,230,0.08); border: 1px solid rgba(65,182,230,0.3); color: #002d72; }
+  .banner-error { background: #fef2f2; border: 1px solid #fecaca; color: #b91c1c; }
+  .toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .search-input { width: 320px; }
+  .popover { position: absolute; z-index: 20; background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,0.12); padding: 12px; font-size: 12px; width: 240px; }
+  .popover .muted { color: #9ca3af; }
+  .empty { text-align: center; color: #9ca3af; padding: 40px 0; }
+  .flex-gap { display: flex; gap: 14px; }
+  .flex-1 { flex: 1; min-width: 0; }
+  .top-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .breadcrumb { font-size: 11px; color: #9ca3af; }
+  .fd-code-row { display: flex; align-items: center; gap: 6px; }
+  .fd-code-row .prefix { font-size: 13px; color: #6b7280; font-weight: 500; }
+</style>
+
+<div id="layout">
+  <div id="sidebar">
+    <div class="brand">
+      <div class="brand-badge">KNT</div>
+      <div class="brand-title">DIP Quotation<br/>System</div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="user-box" id="userBox">Loading…</div>
+  </div>
+  <div id="main"><div class="empty">Loading…</div></div>
+</div>
+
+<script>
+/* ============================== State ============================== */
+var USER = null;
+var MASTERS = null;
+var CUSTOMERS = [];
+var VIEW = { name: 'quotes-list', params: {} };
+var QUOTES_CACHE = [];
+
+/* ============================== Utilities ============================== */
+function formatNum(n, decimals, grouping) {
+  n = Number(n);
+  if (decimals === undefined) decimals = 2;
+  if (grouping === undefined) grouping = true;
+  if (!isFinite(n)) return '-';
+  if (!grouping) return n.toFixed(decimals);
+  return n.toLocaleString('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+function formatPct(rate, decimals) {
+  return formatNum(rate * 100, decimals === undefined ? 1 : decimals) + '%';
+}
+function escapeHtml(s) {
+  return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+  });
+}
+function todayStr() {
+  var d = new Date();
+  return d.getFullYear() + '-' + pad2_(d.getMonth() + 1) + '-' + pad2_(d.getDate());
+}
+function pad2_(n) { return n < 10 ? '0' + n : '' + n; }
+function getByPath(obj, path) {
+  var parts = path.split('.');
+  var cur = obj;
+  for (var i = 0; i < parts.length; i++) {
+    if (cur === undefined || cur === null) return undefined;
+    cur = cur[parts[i]];
+  }
+  return cur;
+}
+function setByPath(obj, path, value) {
+  var parts = path.split('.');
+  var cur = obj;
+  for (var i = 0; i < parts.length - 1; i++) {
+    if (cur[parts[i]] === undefined) cur[parts[i]] = /^\d+$/.test(parts[i + 1]) ? [] : {};
+    cur = cur[parts[i]];
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+function deepClone(obj) { return JSON.parse(JSON.stringify(obj)); }
+function runServer(fnName, args, onSuccess, onError) {
+  var call = google.script.run.withSuccessHandler(onSuccess).withFailureHandler(function (err) {
+    if (onError) onError(err);
+    else alert('Error: ' + (err && err.message ? err.message : err));
+  });
+  call[fnName].apply(call, args || []);
+}
+
+/* ============================== Calc engine (mirrors Calc.gs) ============================== */
+function materialCostPerPc(m) {
+  var totalLoss = m.lossRate.setting + m.lossRate.moulding + m.lossRate.cutting + m.lossRate.inspection;
+  return (m.pricePerKg / 1000) * m.weightG * (1 + totalLoss);
+}
+function processCostPerPc(hourlyChargeTHB, p) {
+  var q;
+  if (p.cycleTimeMin !== undefined && p.cycleTimeMin !== null) {
+    var qph = (p.qtyPerShot * 60) / p.cycleTimeMin;
+    q = qph * p.machines * (1 - p.lossRate);
+  } else if (p.qtyPerHour !== undefined && p.qtyPerHour !== null) {
+    q = p.qtyPerHour * (1 - p.lossRate);
+  } else {
+    q = (3600 / p.secPerPc) * (1 - p.lossRate);
+  }
+  if (q <= 0) return 0;
+  return hourlyChargeTHB / q;
+}
+function laborCostPerPc(labor) {
+  return labor.processes.reduce(function (s, p) { return s + processCostPerPc(labor.hourlyChargeTHB, p); }, 0);
+}
+function laborCostByProcess(labor) {
+  return labor.processes.map(function (p) { return { name: p.name, costPerPc: round_(processCostPerPc(labor.hourlyChargeTHB, p)) }; });
+}
+function packingItemCostPerPc(item) { return item.qtyPerUnit <= 0 ? 0 : item.priceTHB / item.qtyPerUnit; }
+function packingCostPerPc(packing) { return packing.items.reduce(function (s, i) { return s + packingItemCostPerPc(i); }, 0); }
+function transportationCostPerPc(t) { return t.qtyPerTrip <= 0 ? 0 : (t.vehicleTHB + t.fuelTHB) / t.qtyPerTrip; }
+function deriveProcessLossRate(name, material) {
+  var n = String(name).toLowerCase();
+  if (n.indexOf('dipping') !== -1) return 1 - (1 - material.lossRate.setting) * (1 - material.lossRate.moulding);
+  if (n.indexOf('cutting') !== -1) return material.lossRate.cutting;
+  if (n.indexOf('inspection') !== -1) return material.lossRate.inspection;
+  return null;
+}
+function withDerivedLossRates(labor, material) {
+  return {
+    hourlyChargeTHB: labor.hourlyChargeTHB,
+    processes: labor.processes.map(function (p) {
+      var d = deriveProcessLossRate(p.name, material);
+      if (d === null) return p;
+      var copy = {}; Object.keys(p).forEach(function (k) { copy[k] = p[k]; }); copy.lossRate = d; return copy;
+    })
+  };
+}
+function calculateSummary(quote) {
+  var m = materialCostPerPc(quote.material);
+  var l = laborCostPerPc(quote.labor);
+  var pk = packingCostPerPc(quote.packing);
+  var tr = transportationCostPerPc(quote.transportation);
+  var cogs = m + l + pk + tr;
+  var overhead = cogs * quote.overheadRate;
+  var profit = cogs * quote.profitRate;
+  var totalPrice = cogs + overhead + profit;
+  var hasOverride = quote.finalPriceOverride !== undefined && quote.finalPriceOverride !== null && quote.finalPriceOverride !== '';
+  var finalPrice = hasOverride ? Number(quote.finalPriceOverride) : totalPrice;
+  return {
+    materialCostPerPc: round_(m), laborCostPerPc: round_(l), packingCostPerPc: round_(pk), transportationCostPerPc: round_(tr),
+    cogs: round_(cogs), overhead: round_(overhead), profit: round_(profit), totalPrice: round_(totalPrice),
+    materialPct: finalPrice > 0 ? round_(m / finalPrice, 4) : 0,
+    grossMarginPct: finalPrice > 0 ? round_((finalPrice - cogs) / finalPrice, 4) : 0,
+    finalPriceToCustomer: round_(finalPrice)
+  };
+}
+function round_(n, decimals) { var f = Math.pow(10, decimals === undefined ? 3 : decimals); return Math.round(n * f) / f; }
+
+/* ============================== Boot ============================== */
+document.addEventListener('DOMContentLoaded', function () {
+  runServer('getCurrentUserInfo', [], function (user) {
+    USER = user;
+    runServer('getQuoteFormMasters', [], function (masters) {
+      MASTERS = masters;
+      runServer('listCustomers', [], function (customers) {
+        CUSTOMERS = customers || [];
+        renderNav();
+        navigate('quotes-list', {});
+      });
+    });
+  }, function (err) {
+    document.getElementById('main').innerHTML = '<div class="banner banner-error">Sign-in failed: ' + escapeHtml(err && err.message ? err.message : err) + '</div>';
+  });
+});
+
+function renderNav() {
+  var items = [
+    { view: 'quotes-list', label: 'Quotes' },
+    { view: 'quote-form-new', label: 'New Quote' },
+    { view: 'masters', label: 'Master Data', admin: true },
+    { view: 'customers', label: 'Customers', admin: true },
+    { view: 'logs', label: 'Activity Log', admin: true }
+  ];
+  var html = items.filter(function (i) { return !i.admin || USER.isAdmin; }).map(function (i) {
+    var active = VIEW.name === i.view || (i.view === 'quote-form-new' && VIEW.name === 'quote-form');
+    return '<a href="#" class="' + (active ? 'active' : '') + '" data-nav="' + i.view + '">' + i.label + '</a>';
+  }).join('');
+  document.getElementById('nav').innerHTML = html;
+  document.getElementById('userBox').innerHTML = escapeHtml(USER.email) + (USER.isAdmin ? ' <span class="badge badge-admin">Admin</span>' : '');
+  Array.prototype.forEach.call(document.querySelectorAll('[data-nav]'), function (el) {
+    el.onclick = function (e) {
+      e.preventDefault();
+      var v = el.getAttribute('data-nav');
+      if (v === 'quote-form-new') navigate('quote-form', {});
+      else navigate(v, {});
+    };
+  });
+}
+
+function navigate(name, params) {
+  VIEW = { name: name, params: params || {} };
+  renderNav();
+  if (name === 'quotes-list') renderQuotesListView();
+  else if (name === 'quote-form') renderQuoteFormView(params);
+  else if (name === 'masters') renderPlaceholder_('Master Data', 'Manage rates from this page — coming in the next update. For now, ask an admin to edit the Materials / LaborRates / PackingCosts / Transportation / ExchangeRates tabs directly in the spreadsheet.');
+  else if (name === 'customers') renderPlaceholder_('Customers', 'A dedicated Customer Master page is coming in the next update. For now, edit the Customers tab directly in the spreadsheet.');
+  else if (name === 'logs') renderPlaceholder_('Activity Log', 'A dedicated log viewer is coming in the next update. For now, view the ActivityLog / LoginLog tabs directly in the spreadsheet.');
+}
+
+function renderPlaceholder_(title, message) {
+  document.getElementById('main').innerHTML =
+    '<h1>' + escapeHtml(title) + '</h1><div class="banner banner-info">' + escapeHtml(message) + '</div>';
+}
+</script>
+<?!= include('QuotesList'); ?>
+<?!= include('QuoteForm'); ?>

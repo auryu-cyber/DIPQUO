@@ -1,0 +1,161 @@
+<script>
+/* ============================== Quotes List view ============================== */
+var QL_SEARCH = '';
+var QL_SELECTED = {};
+var QL_OPEN_POPOVER = null;
+
+function renderQuotesListView() {
+  document.getElementById('main').innerHTML = '<div class="empty">Loading quotes…</div>';
+  runServer('listQuotes', [], function (quotes) {
+    QUOTES_CACHE = quotes || [];
+    QL_SELECTED = {};
+    qlRender();
+  });
+}
+
+function qlRowKey(q) { return q.id + '::' + q.variant; }
+
+function qlFiltered() {
+  var term = QL_SEARCH.trim().toLowerCase();
+  if (!term) return QUOTES_CACHE;
+  return QUOTES_CACHE.filter(function (q) {
+    return (q.productName || '').toLowerCase().indexOf(term) !== -1 ||
+      (q.material || '').toLowerCase().indexOf(term) !== -1 ||
+      (q.customerName || '').toLowerCase().indexOf(term) !== -1;
+  });
+}
+
+function qlSortTime(q) {
+  var d = q.inquiryDate || q.updatedAt;
+  var t = new Date(d).getTime();
+  return isNaN(t) ? 0 : t;
+}
+
+function qlGroups() {
+  var filtered = qlFiltered();
+  var byCustomer = {};
+  var order = [];
+  filtered.forEach(function (q) {
+    var key = q.customerName || '(No Customer)';
+    if (!byCustomer[key]) { byCustomer[key] = []; order.push(key); }
+    byCustomer[key].push(q);
+  });
+  var groups = order.map(function (customer) {
+    var qs = byCustomer[customer].slice().sort(function (a, b) { return qlSortTime(b) - qlSortTime(a); });
+    return { customer: customer, quotes: qs, latest: qlSortTime(qs[0]) };
+  });
+  groups.sort(function (a, b) { return b.latest - a.latest; });
+  return groups;
+}
+
+function qlCustomerRecord(name) {
+  var lower = String(name).toLowerCase();
+  for (var i = 0; i < CUSTOMERS.length; i++) {
+    if (String(CUSTOMERS[i].customerName).toLowerCase() === lower) return CUSTOMERS[i];
+  }
+  return null;
+}
+
+var QL_STATUS_LABEL = { confirmed: 'Confirmed', comparison: 'Comparison', pending_approval: 'Pending Approval', draft: 'Draft' };
+var QL_STATUS_COLOR = { confirmed: '#0f6fa8', comparison: '#002d72', pending_approval: '#8c756a', draft: '#6b7280' };
+
+function qlRender() {
+  var groups = qlGroups();
+  var selectedCount = Object.keys(QL_SELECTED).filter(function (k) { return QL_SELECTED[k]; }).length;
+
+  var html = '';
+  html += '<div class="top-row"><h1 style="margin:0;">Quotes</h1>' +
+    '<a href="#" class="btn btn-accent" id="qlNewQuote">+ New Quote</a></div>';
+  html += '<div class="toolbar">' +
+    '<input type="text" class="input search-input" id="qlSearch" placeholder="Search by customer, product, or material" value="' + escapeHtml(QL_SEARCH) + '">' +
+    (selectedCount > 0 ? '<span class="badge" style="background:rgba(65,182,230,0.12);color:#0f6fa8;">' + selectedCount + ' selected</span>' : '') +
+    '<button class="btn btn-outline" id="qlDuplicateSelected" ' + (selectedCount === 0 ? 'disabled' : '') + '>Duplicate Selected</button>' +
+    '</div>';
+
+  html += '<div class="section" style="padding:0;overflow:visible;">';
+  if (groups.length === 0) {
+    html += '<div class="empty">No quotes yet. Create one to get started.</div>';
+  } else {
+    html += '<table><thead><tr>' +
+      '<th style="width:30px;"></th><th>Product</th><th>Material</th><th>Monthly Qty</th><th>Unit Price (THB)</th>' +
+      '<th>Gross Margin</th><th>Inquiry Date</th><th>Updated</th><th>Owner</th><th>Status</th><th></th>' +
+      '</tr></thead><tbody>';
+    groups.forEach(function (g) {
+      var rec = qlCustomerRecord(g.customer);
+      html += '<tr class="group-row"><td colspan="11" style="position:relative;">' +
+        '<a href="#" class="qlCustomerToggle" data-customer="' + escapeHtml(g.customer) + '">' + escapeHtml(g.customer) + '</a>' +
+        '<span style="margin-left:8px;font-weight:400;color:#6b7280;font-size:11px;">' + g.quotes.length + ' quote' + (g.quotes.length === 1 ? '' : 's') + '</span>';
+      if (QL_OPEN_POPOVER === g.customer) {
+        html += '<div class="popover">';
+        if (rec) {
+          html += '<div><span class="muted">Industry:</span> ' + escapeHtml(rec.industry || '-') + '</div>' +
+            '<div><span class="muted">Business Type:</span> ' + escapeHtml(rec.businessType || '-') + '</div>' +
+            '<div><span class="muted">Product:</span> ' + escapeHtml(rec.product || '-') + '</div>';
+        } else {
+          html += '<div class="muted">No Customer Master record found for this name.</div>';
+        }
+        html += '</div>';
+      }
+      html += '</td></tr>';
+      g.quotes.forEach(function (q) {
+        var key = qlRowKey(q);
+        var checked = !!QL_SELECTED[key];
+        html += '<tr style="' + (checked ? 'background:rgba(65,182,230,0.06);' : '') + '">' +
+          '<td><input type="checkbox" class="qlCheck" data-key="' + escapeHtml(key) + '" ' + (checked ? 'checked' : '') + '></td>' +
+          '<td><a href="#" class="qlOpen knt-navy" style="font-weight:500;" data-id="' + escapeHtml(q.id) + '" data-variant="' + escapeHtml(q.variant) + '">' +
+          escapeHtml(q.productName) + (q.variant !== 'current' ? ' (' + escapeHtml(q.variant) + ')' : '') + '</a></td>' +
+          '<td>' + escapeHtml(q.material) + '</td>' +
+          '<td>' + formatNum(q.monthlyQty, 0) + ' pcs</td>' +
+          '<td style="font-weight:500;">' + formatNum(q.finalPriceToCustomer, 2) + '</td>' +
+          '<td>' + formatPct(q.grossMarginPct) + '</td>' +
+          '<td style="color:#9ca3af;">' + (q.inquiryDate || '-') + '</td>' +
+          '<td style="color:#9ca3af;">' + (q.updatedAt ? new Date(q.updatedAt).toLocaleDateString() : '-') + '</td>' +
+          '<td>' + escapeHtml(q.updatedBy) + '</td>' +
+          '<td><span class="badge" style="background:rgba(0,0,0,0.04);color:' + (QL_STATUS_COLOR[q.status] || '#374151') + ';">' + (QL_STATUS_LABEL[q.status] || q.status) + '</span></td>' +
+          '<td><a href="#" class="btn btn-outline qlDuplicateOne" style="padding:4px 10px;font-size:11px;" data-id="' + escapeHtml(q.id) + '" data-variant="' + escapeHtml(q.variant) + '">Duplicate</a></td>' +
+          '</tr>';
+      });
+    });
+    html += '</tbody></table>';
+  }
+  html += '</div>';
+
+  document.getElementById('main').innerHTML = html;
+  qlWireEvents();
+}
+
+function qlWireEvents() {
+  document.getElementById('qlNewQuote').onclick = function (e) { e.preventDefault(); navigate('quote-form', {}); };
+  var search = document.getElementById('qlSearch');
+  search.oninput = function () { QL_SEARCH = search.value; qlRender(); search.focus(); search.setSelectionRange(search.value.length, search.value.length); };
+  document.getElementById('qlDuplicateSelected').onclick = function () {
+    var ids = Object.keys(QL_SELECTED).filter(function (k) { return QL_SELECTED[k]; });
+    if (ids.length === 0) return;
+    var pairs = ids.map(function (k) { return k.replace('::', '/'); });
+    runServer('duplicateQuotes', [pairs], function () { renderQuotesListView(); });
+  };
+  Array.prototype.forEach.call(document.querySelectorAll('.qlCheck'), function (el) {
+    el.onchange = function () { QL_SELECTED[el.getAttribute('data-key')] = el.checked; qlRender(); };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.qlCustomerToggle'), function (el) {
+    el.onclick = function (e) {
+      e.preventDefault();
+      var c = el.getAttribute('data-customer');
+      QL_OPEN_POPOVER = QL_OPEN_POPOVER === c ? null : c;
+      qlRender();
+    };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.qlOpen'), function (el) {
+    el.onclick = function (e) {
+      e.preventDefault();
+      navigate('quote-form', { id: el.getAttribute('data-id'), variant: el.getAttribute('data-variant') });
+    };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('.qlDuplicateOne'), function (el) {
+    el.onclick = function (e) {
+      e.preventDefault();
+      navigate('quote-form', { copyFrom: el.getAttribute('data-id') + '/' + el.getAttribute('data-variant') });
+    };
+  });
+}
+</script>

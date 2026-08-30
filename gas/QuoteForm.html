@@ -1,0 +1,558 @@
+<script>
+/* ============================== Quote Form view ============================== */
+var PACKING_CODES = ['plastic-bag', 'carton-box', 'paper-pallet'];
+var MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+var QF = { form: null, finalPriceOverride: null, mode: null, initialQuote: null, copyFromQuote: null, error: null, saving: false };
+var QF_UI = { editingField: null, editingText: '' };
+var QF_HISTORY = { past: [], future: [] };
+var QF_EVENTS_WIRED = false;
+
+document.addEventListener('keydown', function (e) {
+  if (VIEW.name !== 'quote-form') return;
+  if (!(e.ctrlKey || e.metaKey)) return;
+  var key = e.key.toLowerCase();
+  if (key === 'z' && !e.shiftKey) { e.preventDefault(); qfUndo(); }
+  else if (key === 'y' || (key === 'z' && e.shiftKey)) { e.preventDefault(); qfRedo(); }
+});
+
+/* ---------- Master-data resolution (mirrors quote-form.tsx) ---------- */
+function qfResolveAsOf(history, asOf) {
+  for (var i = 0; i < history.length; i++) { if (history[i].effectiveFrom <= asOf) return history[i]; }
+  return null;
+}
+function qfMaterialHistory(code) {
+  for (var i = 0; i < MASTERS.materials.length; i++) if (MASTERS.materials[i].code === code) return MASTERS.materials[i].history;
+  return [];
+}
+function qfPackingHistory(code) {
+  for (var i = 0; i < MASTERS.packingItems.length; i++) if (MASTERS.packingItems[i].code === code) return MASTERS.packingItems[i].history;
+  return [];
+}
+function qfResolveMaterial(code, asOf) { return qfResolveAsOf(qfMaterialHistory(code), asOf); }
+function qfResolveLabor(asOf) { return qfResolveAsOf(MASTERS.laborRateHistory, asOf); }
+function qfResolveTransportation(asOf) { return qfResolveAsOf(MASTERS.transportationHistory, asOf); }
+function qfResolveExchange(asOf) { return qfResolveAsOf(MASTERS.exchangeRateHistory, asOf); }
+function qfMaterialDateOptions(code) { return qfMaterialHistory(code).map(function (h) { return h.effectiveFrom; }); }
+function qfLaborDateOptions() { return MASTERS.laborRateHistory.map(function (h) { return h.effectiveFrom; }); }
+function qfTransportationDateOptions() { return MASTERS.transportationHistory.map(function (h) { return h.effectiveFrom; }); }
+function qfExchangeDateOptions() { return MASTERS.exchangeRateHistory.map(function (h) { return h.effectiveFrom; }); }
+function qfPackingDateOptions() {
+  var set = {};
+  PACKING_CODES.forEach(function (code) { qfPackingHistory(code).forEach(function (h) { set[h.effectiveFrom] = true; }); });
+  return Object.keys(set).sort().reverse();
+}
+function periodOptions(granularity) {
+  if (granularity === 'month') return MONTH_NAMES.map(function (name, i) { return { value: i + 1, label: name }; });
+  if (granularity === 'quarter') return [1, 2, 3, 4].map(function (q) { return { value: q, label: 'Q' + q }; });
+  return [{ value: 1, label: 'H1 (Jan–Jun)' }, { value: 2, label: 'H2 (Jul–Dec)' }];
+}
+
+/* ---------- Form construction ---------- */
+function qfEmptyForm() {
+  var asOf = todayStr();
+  var firstMaterial = MASTERS.materials[0];
+  var materialRec = firstMaterial ? qfResolveMaterial(firstMaterial.code, asOf) : null;
+  var laborRec = qfResolveLabor(asOf);
+  var transportRec = qfResolveTransportation(asOf);
+  var fxRec = qfResolveExchange(asOf);
+  var packingResolved = PACKING_CODES.map(function (code) { return qfResolveAsOf(qfPackingHistory(code), asOf); });
+
+  return {
+    id: '', variant: 'current', productName: '', status: 'draft', monthlyQty: 0,
+    customerName: '', projectName: '', projectType: 'new_model',
+    massProductionStart: { year: new Date().getFullYear(), granularity: 'month', period: new Date().getMonth() + 1 },
+    inquiryDate: asOf, orderStatus: 'in_negotiation', customerCurrency: 'THB', pricingDate: asOf,
+    materialRef: { materialCode: firstMaterial ? firstMaterial.code : '', effectiveFrom: materialRec ? materialRec.effectiveFrom : asOf },
+    material: {
+      name: materialRec ? materialRec.displayName : '', pricePerKg: materialRec ? Number(materialRec.pricePerKg) : 0,
+      weightG: 0, lossRate: { setting: 0.02, moulding: 0.02, cutting: 0.02, inspection: 0.02 }
+    },
+    laborRef: { record: laborRec ? ('labor-rates/default/' + laborRec.effectiveFrom) : '', effectiveFrom: laborRec ? laborRec.effectiveFrom : asOf },
+    labor: {
+      hourlyChargeTHB: laborRec ? Number(laborRec.hourlyChargeTHB) : 0,
+      processes: [
+        { name: 'Dipping', qtyPerShot: 0, cycleTimeMin: 1, machines: 1, lossRate: 0.04 },
+        { name: 'Cutting (Manual)', qtyPerHour: 0, lossRate: 0.02 },
+        { name: 'Inspection', secPerPc: 0, lossRate: 0.02 },
+        { name: 'Packing', secPerPc: 0, lossRate: 0.01 }
+      ]
+    },
+    packingRef: {
+      records: PACKING_CODES.map(function (code, i) { var r = packingResolved[i]; return r ? ('packing-costs/' + code + '/' + r.effectiveFrom) : ''; }),
+      effectiveFrom: asOf
+    },
+    packing: {
+      items: PACKING_CODES.map(function (code, i) {
+        var r = packingResolved[i];
+        return { name: r ? r.displayName : code, priceTHB: r ? Number(r.priceTHB) : 0, qtyPerUnit: r ? Number(r.qtyPerUnit) : 1 };
+      })
+    },
+    transportationRef: { record: transportRec ? ('transportation/default/' + transportRec.effectiveFrom) : '', effectiveFrom: transportRec ? transportRec.effectiveFrom : asOf },
+    transportation: { vehicleTHB: transportRec ? Number(transportRec.vehicleTHB) : 0, fuelTHB: transportRec ? Number(transportRec.fuelTHB) : 0, qtyPerTrip: transportRec ? Number(transportRec.qtyPerTrip) : 1 },
+    exchangeRateRef: { record: fxRec ? ('exchange-rates/default/' + fxRec.effectiveFrom) : '', effectiveFrom: fxRec ? fxRec.effectiveFrom : asOf },
+    exchangeRate: { jpyPerThb: fxRec ? Number(fxRec.jpyPerThb) : 0, usdPerThb: fxRec ? Number(fxRec.usdPerThb) : 0 },
+    tooling: { items: [], customerMarkup: 1.25 },
+    overheadRate: 0.1, profitRate: 0.5
+  };
+}
+
+function withDateFallbacksClient(q) {
+  var base = deepClone(q);
+  var fallback = base.pricingDate || todayStr();
+  if (!base.materialRef.effectiveFrom) base.materialRef.effectiveFrom = fallback;
+  if (!base.laborRef.effectiveFrom) base.laborRef.effectiveFrom = fallback;
+  if (!base.transportationRef.effectiveFrom) base.transportationRef.effectiveFrom = fallback;
+  if (!base.packingRef.effectiveFrom) base.packingRef.effectiveFrom = fallback;
+  if (!base.exchangeRateRef) base.exchangeRateRef = { record: '' };
+  if (!base.exchangeRateRef.effectiveFrom) base.exchangeRateRef.effectiveFrom = fallback;
+  if (!base.exchangeRate) {
+    var fx = qfResolveExchange(base.exchangeRateRef.effectiveFrom);
+    base.exchangeRate = { jpyPerThb: fx ? Number(fx.jpyPerThb) : 0, usdPerThb: fx ? Number(fx.usdPerThb) : 0 };
+  }
+  base.pricingDate = fallback;
+  base.customerName = base.customerName || '';
+  base.projectName = base.projectName || '';
+  base.projectType = base.projectType || 'new_model';
+  base.massProductionStart = base.massProductionStart || { year: new Date().getFullYear(), granularity: 'month', period: new Date().getMonth() + 1 };
+  base.inquiryDate = base.inquiryDate || fallback;
+  base.orderStatus = base.orderStatus || 'in_negotiation';
+  base.customerCurrency = base.customerCurrency || 'THB';
+  return base;
+}
+
+function renderQuoteFormView(params) {
+  document.getElementById('main').innerHTML = '<div class="empty">Loading…</div>';
+  if (params.id && params.variant) {
+    runServer('getQuote', [params.id, params.variant], function (quote) {
+      if (!quote) { document.getElementById('main').innerHTML = '<div class="banner banner-error">Quote not found.</div>'; return; }
+      QF = { form: withDateFallbacksClient(quote), finalPriceOverride: (quote.finalPriceOverride === undefined ? null : quote.finalPriceOverride), mode: 'edit', initialQuote: quote, copyFromQuote: null, error: null, saving: false };
+      qfResetHistory(); qfRender();
+    });
+  } else if (params.copyFrom) {
+    var parts = params.copyFrom.split('/');
+    runServer('getQuote', [parts[0], parts[1]], function (quote) {
+      if (!quote) { document.getElementById('main').innerHTML = '<div class="banner banner-error">Quote not found.</div>'; return; }
+      var copied = withDateFallbacksClient(quote);
+      copied.id = ''; copied.variant = 'current'; copied.status = 'draft';
+      QF = { form: copied, finalPriceOverride: (quote.finalPriceOverride === undefined ? null : quote.finalPriceOverride), mode: 'copy', initialQuote: null, copyFromQuote: quote, error: null, saving: false };
+      qfResetHistory(); qfRender();
+    });
+  } else {
+    QF = { form: qfEmptyForm(), finalPriceOverride: null, mode: 'new', initialQuote: null, copyFromQuote: null, error: null, saving: false };
+    qfResetHistory(); qfRender();
+  }
+}
+
+/* ---------- Undo/redo ---------- */
+function qfResetHistory() { QF_HISTORY = { past: [], future: [] }; }
+function qfSnapshot() { return { form: deepClone(QF.form), finalPriceOverride: QF.finalPriceOverride }; }
+function qfCommit() {
+  QF_HISTORY.past.push(qfSnapshot());
+  QF_HISTORY.future = [];
+  qfRenderPreserveFocus();
+}
+function qfUndo() {
+  if (QF_HISTORY.past.length === 0) return;
+  var prev = QF_HISTORY.past.pop();
+  QF_HISTORY.future.push(qfSnapshot());
+  QF.form = prev.form; QF.finalPriceOverride = prev.finalPriceOverride;
+  qfRenderPreserveFocus();
+}
+function qfRedo() {
+  if (QF_HISTORY.future.length === 0) return;
+  var next = QF_HISTORY.future.pop();
+  QF_HISTORY.past.push(qfSnapshot());
+  QF.form = next.form; QF.finalPriceOverride = next.finalPriceOverride;
+  qfRenderPreserveFocus();
+}
+function qfRenderPreserveFocus() {
+  var active = document.activeElement;
+  var id = active && active.id;
+  var selStart = active && typeof active.selectionStart === 'number' ? active.selectionStart : null;
+  var selEnd = active && typeof active.selectionEnd === 'number' ? active.selectionEnd : null;
+  qfRender();
+  if (id) {
+    var el = document.getElementById(id);
+    if (el) {
+      el.focus();
+      if (selStart !== null && el.setSelectionRange) { try { el.setSelectionRange(selStart, selEnd); } catch (e) {} }
+    }
+  }
+}
+
+/* ---------- Field change handlers ---------- */
+function selectMaterial(code) {
+  var asOf = QF.form.materialRef.effectiveFrom || todayStr();
+  var rec = qfResolveMaterial(code, asOf);
+  QF.form.materialRef = { materialCode: code, effectiveFrom: rec ? rec.effectiveFrom : asOf };
+  if (rec) QF.form.material = { name: rec.displayName, pricePerKg: Number(rec.pricePerKg), weightG: QF.form.material.weightG, lossRate: QF.form.material.lossRate };
+  qfCommit();
+}
+function changeMaterialDate(newDate) {
+  var rec = qfResolveMaterial(QF.form.materialRef.materialCode, newDate);
+  QF.form.materialRef = { materialCode: QF.form.materialRef.materialCode, effectiveFrom: rec ? rec.effectiveFrom : newDate };
+  if (rec) QF.form.material = { name: rec.displayName, pricePerKg: Number(rec.pricePerKg), weightG: QF.form.material.weightG, lossRate: QF.form.material.lossRate };
+  qfCommit();
+}
+function changeLaborDate(newDate) {
+  var rec = qfResolveLabor(newDate);
+  QF.form.laborRef = { record: rec ? ('labor-rates/default/' + rec.effectiveFrom) : QF.form.laborRef.record, effectiveFrom: rec ? rec.effectiveFrom : newDate };
+  if (rec) QF.form.labor.hourlyChargeTHB = Number(rec.hourlyChargeTHB);
+  qfCommit();
+}
+function changeTransportationDate(newDate) {
+  var rec = qfResolveTransportation(newDate);
+  QF.form.transportationRef = { record: rec ? ('transportation/default/' + rec.effectiveFrom) : QF.form.transportationRef.record, effectiveFrom: rec ? rec.effectiveFrom : newDate };
+  if (rec) QF.form.transportation = { vehicleTHB: Number(rec.vehicleTHB), fuelTHB: Number(rec.fuelTHB), qtyPerTrip: Number(rec.qtyPerTrip) };
+  qfCommit();
+}
+function changePackingDate(newDate) {
+  var resolved = PACKING_CODES.map(function (code) { return qfResolveAsOf(qfPackingHistory(code), newDate); });
+  QF.form.packingRef = {
+    records: PACKING_CODES.map(function (code, i) { var r = resolved[i]; return r ? ('packing-costs/' + code + '/' + r.effectiveFrom) : QF.form.packingRef.records[i]; }),
+    effectiveFrom: newDate
+  };
+  QF.form.packing.items = QF.form.packing.items.map(function (item, i) {
+    var r = resolved[i];
+    return r ? { name: r.displayName, priceTHB: Number(r.priceTHB), qtyPerUnit: Number(r.qtyPerUnit) } : item;
+  });
+  qfCommit();
+}
+function changeExchangeRateDate(newDate) {
+  var rec = qfResolveExchange(newDate);
+  QF.form.exchangeRateRef = { record: rec ? ('exchange-rates/default/' + rec.effectiveFrom) : QF.form.exchangeRateRef.record, effectiveFrom: rec ? rec.effectiveFrom : newDate };
+  QF.form.exchangeRate = { jpyPerThb: rec ? Number(rec.jpyPerThb) : 0, usdPerThb: rec ? Number(rec.usdPerThb) : 0 };
+  qfCommit();
+}
+function setFinalPriceThb(v) { QF.finalPriceOverride = v; qfCommit(); }
+function setFinalPriceJpy(v) { if (QF.form.exchangeRate.jpyPerThb > 0) { QF.finalPriceOverride = v / QF.form.exchangeRate.jpyPerThb; qfCommit(); } }
+function setFinalPriceUsd(v) { if (QF.form.exchangeRate.usdPerThb > 0) { QF.finalPriceOverride = v / QF.form.exchangeRate.usdPerThb; qfCommit(); } }
+
+function qfHandleAction(action, value, el) {
+  if (action === 'material') { selectMaterial(value); return; }
+  if (action === 'materialDate') { changeMaterialDate(value); return; }
+  if (action === 'laborDate') { changeLaborDate(value); return; }
+  if (action === 'transportationDate') { changeTransportationDate(value); return; }
+  if (action === 'packingDate') { changePackingDate(value); return; }
+  if (action === 'exchangeDate') { changeExchangeRateDate(value); return; }
+  if (action === 'granularity') { QF.form.massProductionStart.granularity = value; QF.form.massProductionStart.period = undefined; qfCommit(); return; }
+  if (action === 'period') { QF.form.massProductionStart.period = value === '' ? undefined : Number(value); qfCommit(); return; }
+  if (action === 'fdCode') {
+    var digits = String(value).replace(/\D/g, '').slice(0, 4);
+    QF.form.id = digits ? ('F-D' + digits) : '';
+    qfCommit(); return;
+  }
+  if (action === 'toolingQty') { var i = Number(el.getAttribute('data-index')); QF.form.tooling.items[i].qty = value; delete QF.form.tooling.items[i].totalTHB; qfCommit(); return; }
+  if (action === 'toolingPrice') { var i2 = Number(el.getAttribute('data-index')); QF.form.tooling.items[i2].unitPriceTHB = value; delete QF.form.tooling.items[i2].totalTHB; qfCommit(); return; }
+  if (action === 'currencyThb') { setFinalPriceThb(value); return; }
+  if (action === 'currencyJpy') { setFinalPriceJpy(value); return; }
+  if (action === 'currencyUsd') { setFinalPriceUsd(value); return; }
+}
+
+function qfWireDelegatedEvents() {
+  if (QF_EVENTS_WIRED) return;
+  QF_EVENTS_WIRED = true;
+  var main = document.getElementById('main');
+
+  main.addEventListener('focusin', function (e) {
+    var t = e.target;
+    if (VIEW.name === 'quote-form' && t.dataset && t.dataset.numField) {
+      var val = Number(t.dataset.path ? getByPath(QF, t.dataset.path) : 0);
+      if (t.dataset.percent === '1') val = val * 100;
+      QF_UI.editingField = t.id;
+      QF_UI.editingText = val === 0 ? '' : String(val);
+    }
+  });
+  main.addEventListener('focusout', function (e) {
+    var t = e.target;
+    if (VIEW.name === 'quote-form' && t.dataset && t.dataset.numField) {
+      QF_UI.editingField = null;
+      qfRender();
+    }
+  });
+  main.addEventListener('input', function (e) {
+    if (VIEW.name !== 'quote-form') return;
+    var t = e.target;
+    if (!t.dataset) return;
+    if (t.dataset.numField) {
+      var raw = t.value;
+      QF_UI.editingText = raw;
+      var cleaned = raw.replace(/,/g, '');
+      var parsed = (cleaned === '' || cleaned === '-') ? 0 : Number(cleaned);
+      if (isNaN(parsed)) return;
+      var value = t.dataset.percent === '1' ? parsed / 100 : parsed;
+      if (t.dataset.action) qfHandleAction(t.dataset.action, value, t);
+      else { setByPath(QF, t.dataset.path, value); qfCommit(); }
+    } else if (t.dataset.action) {
+      qfHandleAction(t.dataset.action, t.value, t);
+    } else if (t.dataset.path !== undefined) {
+      setByPath(QF, t.dataset.path, t.value);
+      qfCommit();
+    }
+  });
+  main.addEventListener('change', function (e) {
+    if (VIEW.name !== 'quote-form') return;
+    var t = e.target;
+    if (!t.dataset || t.tagName !== 'SELECT') return;
+    if (t.dataset.action) qfHandleAction(t.dataset.action, t.value, t);
+    else if (t.dataset.path !== undefined) { setByPath(QF, t.dataset.path, t.value); qfCommit(); }
+  });
+  main.addEventListener('click', function (e) {
+    if (VIEW.name !== 'quote-form') return;
+    var t = e.target.closest ? e.target.closest('[data-click]') : null;
+    if (!t) return;
+    e.preventDefault();
+    var click = t.getAttribute('data-click');
+    if (click === 'addTooling') { QF.form.tooling.items.push({ name: 'New item', qty: 1, unitPriceTHB: 0 }); qfCommit(); }
+    else if (click === 'removeTooling') { QF.form.tooling.items.splice(Number(t.getAttribute('data-index')), 1); qfCommit(); }
+    else if (click === 'save') { qfSave(); }
+    else if (click === 'duplicate') { navigate('quote-form', { copyFrom: QF.initialQuote.id + '/' + QF.initialQuote.variant }); }
+  });
+}
+
+function qfSave() {
+  QF.error = null;
+  var f = QF.form;
+  if (!f.productName || !f.productName.trim()) { QF.error = 'Product Name is required.'; qfRender(); return; }
+  if (!f.variant || !f.variant.trim()) { QF.error = 'Variant is required.'; qfRender(); return; }
+  if (!f.customerName || !f.customerName.trim() || !f.projectName || !f.projectName.trim()) { QF.error = 'Customer Name and Project Name are required.'; qfRender(); return; }
+  if (f.projectType === 'other' && (!f.projectTypeOther || !f.projectTypeOther.trim())) { QF.error = 'Please describe the project type when "Other" is selected.'; qfRender(); return; }
+  if (!f.massProductionStart.year) { QF.error = 'Mass Production Start Year is required.'; qfRender(); return; }
+
+  var payload = deepClone(f);
+  payload.finalPriceOverride = (QF.finalPriceOverride === null || QF.finalPriceOverride === undefined) ? undefined : QF.finalPriceOverride;
+  var renameFrom = QF.mode === 'edit' ? { id: QF.initialQuote.id, variant: QF.initialQuote.variant } : null;
+
+  QF.saving = true; qfRender();
+  runServer('saveQuote', [payload, renameFrom], function (saved) {
+    QF.saving = false;
+    navigate('quote-form', { id: saved.id, variant: saved.variant });
+  }, function (err) {
+    QF.saving = false;
+    QF.error = err && err.message ? err.message : String(err);
+    qfRender();
+  });
+}
+
+/* ---------- Rendering ---------- */
+function qfNumFieldId(key) { return 'qf-' + String(key).replace(/[^a-zA-Z0-9]/g, '_'); }
+
+function qfNumInputHtml(opts) {
+  var idKey = opts.idKey || opts.path || (opts.action + '-' + opts.index);
+  var id = qfNumFieldId(idKey);
+  var rawValue = opts.value !== undefined ? opts.value : getByPath(QF, opts.path);
+  var displayNum = opts.percent ? Number(rawValue) * 100 : Number(rawValue);
+  var isEditing = QF_UI.editingField === id;
+  var display = isEditing ? QF_UI.editingText : formatNum(displayNum, opts.decimals === undefined ? 2 : opts.decimals, opts.grouping !== false);
+  var attrs = 'type="text" inputmode="decimal" id="' + id + '" class="input" data-num-field="1"';
+  if (opts.path) attrs += ' data-path="' + escapeHtml(opts.path) + '"';
+  if (opts.action) attrs += ' data-action="' + opts.action + '"';
+  if (opts.index !== undefined) attrs += ' data-index="' + opts.index + '"';
+  if (opts.percent) attrs += ' data-percent="1"';
+  return '<input ' + attrs + ' value="' + escapeHtml(display) + '">';
+}
+function qfFieldText(label, path, placeholder) {
+  var val = getByPath(QF, path) || '';
+  return '<div class="field"><label>' + escapeHtml(label) + '</label><input type="text" class="input" data-path="' + escapeHtml(path) + '" placeholder="' + escapeHtml(placeholder || '') + '" value="' + escapeHtml(val) + '"></div>';
+}
+function qfFieldSelect(label, path, options) {
+  var val = getByPath(QF, path);
+  var opts = options.map(function (o) { return '<option value="' + escapeHtml(o[0]) + '"' + (o[0] === val ? ' selected' : '') + '>' + escapeHtml(o[1]) + '</option>'; }).join('');
+  return '<div class="field"><label>' + escapeHtml(label) + '</label><select class="input" data-path="' + escapeHtml(path) + '">' + opts + '</select></div>';
+}
+function qfFieldNum(label, path, decimals) {
+  return '<div class="field"><label>' + escapeHtml(label) + '</label>' + qfNumInputHtml({ path: path, decimals: decimals }) + '</div>';
+}
+function qfRateDateSelect(currentValue, options, action, dark) {
+  var hasValue = options.indexOf(currentValue) !== -1;
+  var opts = '';
+  if (!hasValue) opts += '<option value="' + escapeHtml(currentValue) + '">' + escapeHtml(currentValue || 'No rate registered') + '</option>';
+  options.forEach(function (d) { opts += '<option value="' + escapeHtml(d) + '"' + (d === currentValue ? ' selected' : '') + '>' + escapeHtml(d) + '</option>'; });
+  var spanClass = dark ? 'rate-date-select dark-rate' : 'rate-date-select';
+  var selectClass = dark ? 'dark-select' : '';
+  return '<span class="' + spanClass + '">Rate as of<select class="' + selectClass + '" data-action="' + action + '">' + opts + '</select></span>';
+}
+
+function qfRenderProcessCard(p, i, laborBreakdown) {
+  var derived = deriveProcessLossRate(p.name, QF.form.material);
+  var cost = laborBreakdown[i] ? laborBreakdown[i].costPerPc : 0;
+  var fieldsHtml = '';
+  if (p.cycleTimeMin !== undefined) {
+    fieldsHtml += qfFieldNum('Qty/Shot', 'form.labor.processes.' + i + '.qtyPerShot', 0);
+    fieldsHtml += qfFieldNum('Cycle Time (min)', 'form.labor.processes.' + i + '.cycleTimeMin', 2);
+    fieldsHtml += qfFieldNum('Machines', 'form.labor.processes.' + i + '.machines', 0);
+  } else if (p.qtyPerHour !== undefined) {
+    fieldsHtml += qfFieldNum('Qty/Hour', 'form.labor.processes.' + i + '.qtyPerHour', 0);
+  } else {
+    fieldsHtml += qfFieldNum('Time/pc (sec)', 'form.labor.processes.' + i + '.secPerPc', 2);
+  }
+  if (derived === null) {
+    fieldsHtml += '<div class="field"><label>Loss Rate</label>' + qfNumInputHtml({ path: 'form.labor.processes.' + i + '.lossRate', decimals: 2, percent: true, idKey: 'proc-loss-' + i }) + '</div>';
+  } else {
+    fieldsHtml += '<div class="field"><label>Loss Rate (from Material)</label><div class="input" style="background:#f9fafb;color:#6b7280;">' + formatPct(derived) + '</div></div>';
+  }
+  return '<div class="proc-card"><div class="proc-title"><span>' + escapeHtml(p.name) + '</span><span class="cost-chip">' + formatNum(cost, 2) + ' THB/pc</span></div>' +
+    '<div class="grid4" style="grid-template-columns:repeat(2,1fr);gap:8px;">' + fieldsHtml + '</div></div>';
+}
+
+function qfSumRow(label, value, bold) {
+  return '<div class="sum-row' + (bold ? ' bold' : '') + '"><span>' + escapeHtml(label) + '</span><span>' + formatNum(value) + ' THB</span></div>';
+}
+
+function qfCurrencyRow(label, value, action, highlighted) {
+  var id = qfNumFieldId('currency-' + action);
+  var isEditing = QF_UI.editingField === id;
+  var display = isEditing ? QF_UI.editingText : formatNum(value, 2, true);
+  return '<div class="currency-row' + (highlighted ? ' highlight' : '') + '">' +
+    '<label>' + label + '</label>' +
+    '<input type="text" inputmode="decimal" id="' + id + '" data-num-field="1" data-action="' + action + '" value="' + escapeHtml(display) + '">' +
+    '</div>';
+}
+
+function qfRender() {
+  qfWireDelegatedEvents();
+  var f = QF.form;
+  var effectiveLabor = withDerivedLossRates(f.labor, f.material);
+  var laborBreakdown = laborCostByProcess(effectiveLabor);
+  var quoteForCalc = deepClone(f);
+  quoteForCalc.labor = effectiveLabor;
+  quoteForCalc.finalPriceOverride = (QF.finalPriceOverride === null || QF.finalPriceOverride === undefined) ? undefined : QF.finalPriceOverride;
+  var summary = calculateSummary(quoteForCalc);
+  var finalPrice = (QF.finalPriceOverride === null || QF.finalPriceOverride === undefined) ? summary.finalPriceToCustomer : QF.finalPriceOverride;
+  var jpy = finalPrice * f.exchangeRate.jpyPerThb;
+  var usd = finalPrice * f.exchangeRate.usdPerThb;
+  var monthlySales = finalPrice * f.monthlyQty;
+  var monthlyMargin = (finalPrice - summary.cogs) * f.monthlyQty;
+  var toolingTotal = f.tooling.items.reduce(function (s, it) { return s + (it.totalTHB !== undefined ? it.totalTHB : (it.qty || 0) * (it.unitPriceTHB || 0)); }, 0);
+
+  var html = '';
+  html += '<div class="top-row"><div><div class="breadcrumb">Quotes &nbsp;›&nbsp; ' + (QF.mode === 'edit' ? 'Edit' : 'New') + ' ' + escapeHtml(f.id || f.productName || 'quote') + '</div>' +
+    '<h1 style="margin:4px 0 0;">' + (QF.mode === 'edit' ? ('Edit Quote — ' + escapeHtml(QF.initialQuote.id)) : 'New Quote') + '</h1></div>' +
+    '<div style="display:flex;align-items:center;gap:10px;">' +
+    (QF.error ? '<span style="color:#f16667;font-size:12px;">' + escapeHtml(QF.error) + '</span>' : '') +
+    (QF.mode === 'edit' ? '<button class="btn btn-outline" data-click="duplicate">Duplicate this Quote</button>' : '') +
+    '<button class="btn btn-primary" data-click="save" ' + (QF.saving ? 'disabled' : '') + '>' + (QF.saving ? 'Saving…' : 'Save (write to Spreadsheet)') + '</button>' +
+    '</div></div>';
+
+  if (QF.mode === 'copy') {
+    html += '<div class="banner banner-info">Copied from <strong>' + escapeHtml(QF.copyFromQuote.id) + '/' + escapeHtml(QF.copyFromQuote.variant) +
+      '</strong> as a new quote — the original is unchanged. Set a new F-D CODE or Variant below before saving so it doesn’t collide with the original.</div>';
+  }
+
+  html += '<div class="flex-gap"><div class="flex-1">';
+
+  html += '<div class="section"><div class="section-title">Project Info</div><div class="grid3">';
+  html += qfFieldText('Customer Name *', 'form.customerName', 'Customer company name');
+  html += qfFieldText('Project Name *', 'form.projectName', 'Project name');
+  html += qfFieldSelect('Project Type *', 'form.projectType', [['new_model', 'New Model'], ['switch_from_other', 'Switch from Other Supplier'], ['other', 'Other']]);
+  if (f.projectType === 'other') html += '<div style="grid-column:1/-1;">' + qfFieldText('Other — Please Describe *', 'form.projectTypeOther', 'Describe the project type') + '</div>';
+  html += '<div class="field"><label>Mass Production Start — Year *</label>' + qfNumInputHtml({ path: 'form.massProductionStart.year', decimals: 0, grouping: false }) + '</div>';
+  html += '<div class="field"><label>Granularity</label><select class="input" data-action="granularity">' +
+    ['month', 'quarter', 'half'].map(function (g) { return '<option value="' + g + '"' + (f.massProductionStart.granularity === g ? ' selected' : '') + '>' + (g === 'month' ? 'Month' : g === 'quarter' ? 'Quarter' : 'Half Year') + '</option>'; }).join('') + '</select></div>';
+  var periodOpts = periodOptions(f.massProductionStart.granularity);
+  html += '<div class="field"><label>Period</label><select class="input" data-action="period"><option value="">Not yet decided</option>' +
+    periodOpts.map(function (o) { return '<option value="' + o.value + '"' + (f.massProductionStart.period === o.value ? ' selected' : '') + '>' + o.label + '</option>'; }).join('') + '</select></div>';
+  html += '<div class="field"><label>Inquiry Date</label><input type="date" class="input" data-path="form.inquiryDate" value="' + escapeHtml(f.inquiryDate) + '"></div>';
+  html += qfFieldSelect('Order Status', 'form.orderStatus', [['in_negotiation', 'In Negotiation'], ['ordered', 'Ordered'], ['lost', 'Lost'], ['on_hold', 'On Hold']]);
+  html += '</div></div>';
+
+  html += '<div class="section"><div class="section-title">Product Info</div><div class="grid3">';
+  html += '<div class="field"><label>F-D CODE</label><div class="fd-code-row"><span class="prefix">F-D</span>' +
+    '<input type="text" class="input" maxlength="4" placeholder="0005" data-action="fdCode" value="' + escapeHtml(f.id.indexOf('F-D') === 0 ? f.id.slice(3) : f.id) + '"></div></div>';
+  html += qfFieldText('Product Name *', 'form.productName', 'Product display name');
+  html += '<div class="field"><label>Variant</label><input type="text" class="input" data-path="form.variant" placeholder="current" value="' + escapeHtml(f.variant) + '">' +
+    '<div class="hint">Groups multiple versions of the same quote (e.g. "current", "alt-material") so they can be compared side by side.</div></div>';
+  html += '<div class="field"><label>Monthly Qty</label>' + qfNumInputHtml({ path: 'form.monthlyQty', decimals: 0 }) + '</div>';
+  html += qfFieldSelect('Status', 'form.status', [['draft', 'draft'], ['pending_approval', 'pending_approval'], ['confirmed', 'confirmed'], ['comparison', 'comparison']]);
+  html += '</div></div>';
+
+  html += '<div class="section"><div class="section-title"><span>Material Cost</span>' + qfRateDateSelect(f.materialRef.effectiveFrom, qfMaterialDateOptions(f.materialRef.materialCode), 'materialDate') + '</div>';
+  html += '<div class="grid3" style="margin-bottom:14px;">';
+  html += '<div class="field"><label>Material (from master)</label><select class="input" data-action="material"><option value="">Select…</option>' +
+    MASTERS.materials.map(function (m) {
+      var name = m.history[0] ? m.history[0].displayName : m.code;
+      return '<option value="' + escapeHtml(m.code) + '"' + (m.code === f.materialRef.materialCode ? ' selected' : '') + '>' + escapeHtml(name) + '</option>';
+    }).join('') + '</select></div>';
+  html += '<div class="field"><label>Material Price (THB/kg)</label>' + qfNumInputHtml({ path: 'form.material.pricePerKg' }) + '</div>';
+  html += '<div class="field"><label>Weight (g/pc)</label>' + qfNumInputHtml({ path: 'form.material.weightG', decimals: 3 }) + '</div>';
+  html += '</div><div style="font-size:11px;color:#6b7280;margin-bottom:8px;">Loss Rate Breakdown</div><div class="grid4">';
+  ['setting', 'moulding', 'cutting', 'inspection'].forEach(function (k) {
+    html += '<div class="field"><label>' + k.charAt(0).toUpperCase() + k.slice(1) + '</label>' + qfNumInputHtml({ path: 'form.material.lossRate.' + k, decimals: 2, percent: true }) + '</div>';
+  });
+  html += '</div><div style="margin-top:10px;font-size:13px;font-weight:500;color:#002d72;">Material Cost/pc: ' + formatNum(summary.materialCostPerPc) + ' THB</div></div>';
+
+  html += '<div class="section"><div class="section-title"><span>Labor Cost (by Process)</span>' + qfRateDateSelect(f.laborRef.effectiveFrom, qfLaborDateOptions(), 'laborDate') + '</div>';
+  html += '<div class="grid4" style="grid-template-columns:repeat(2,1fr);">';
+  f.labor.processes.forEach(function (p, i) { html += qfRenderProcessCard(p, i, laborBreakdown); });
+  html += '</div><div class="grid3" style="grid-template-columns:1fr 1fr;margin-top:10px;align-items:end;">' +
+    '<div class="field"><label>Hourly Charge (THB/hour)</label>' + qfNumInputHtml({ path: 'form.labor.hourlyChargeTHB' }) + '</div>' +
+    '<div style="text-align:right;font-size:13px;font-weight:700;color:#002d72;">Total Labor Cost: ' + formatNum(summary.laborCostPerPc) + ' THB/pc</div></div></div>';
+
+  html += '<div class="flex-gap">';
+  html += '<div class="section flex-1"><div class="section-title"><span>Packing Cost</span>' + qfRateDateSelect(f.packingRef.effectiveFrom, qfPackingDateOptions(), 'packingDate') + '</div>';
+  f.packing.items.forEach(function (item, i) {
+    html += '<div class="grid4" style="margin-bottom:8px;align-items:end;">' +
+      '<div style="font-size:12px;color:#374151;">' + escapeHtml(item.name) + '</div>' +
+      '<div class="field"><label>Price (THB)</label>' + qfNumInputHtml({ path: 'form.packing.items.' + i + '.priceTHB' }) + '</div>' +
+      '<div class="field"><label>Qty/unit</label>' + qfNumInputHtml({ path: 'form.packing.items.' + i + '.qtyPerUnit', decimals: 0 }) + '</div>' +
+      '<div style="text-align:right;font-size:11px;color:#6b7280;">' + formatNum(packingItemCostPerPc(item)) + ' THB/pc</div></div>';
+  });
+  html += '<div style="font-size:13px;font-weight:700;color:#002d72;margin-top:6px;">Total Packing Cost: ' + formatNum(summary.packingCostPerPc) + ' THB/pc</div></div>';
+
+  html += '<div class="section flex-1"><div class="section-title"><span>Transportation Cost</span>' + qfRateDateSelect(f.transportationRef.effectiveFrom, qfTransportationDateOptions(), 'transportationDate') + '</div>';
+  html += '<div class="grid3">' +
+    '<div class="field"><label>Vehicle (THB)</label>' + qfNumInputHtml({ path: 'form.transportation.vehicleTHB' }) + '</div>' +
+    '<div class="field"><label>Fuel (THB)</label>' + qfNumInputHtml({ path: 'form.transportation.fuelTHB' }) + '</div>' +
+    '<div class="field"><label>Qty/trip</label>' + qfNumInputHtml({ path: 'form.transportation.qtyPerTrip', decimals: 0 }) + '</div></div>' +
+    '<div style="font-size:13px;font-weight:700;color:#002d72;margin-top:6px;">Total Transportation Cost: ' + formatNum(summary.transportationCostPerPc) + ' THB/pc</div></div>';
+  html += '</div>';
+
+  html += '<div class="section"><div class="section-title">Tooling Cost (Initial Investment)</div>';
+  f.tooling.items.forEach(function (item, i) {
+    var subtotal = item.totalTHB !== undefined ? item.totalTHB : (item.qty || 0) * (item.unitPriceTHB || 0);
+    html += '<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:8px;margin-bottom:8px;align-items:end;">' +
+      '<input type="text" class="input" data-path="form.tooling.items.' + i + '.name" value="' + escapeHtml(item.name) + '">' +
+      '<div class="field"><label>Qty</label>' + qfNumInputHtml({ value: item.qty || 0, decimals: 0, action: 'toolingQty', index: i, idKey: 'tool-qty-' + i }) + '</div>' +
+      '<div class="field"><label>Unit Price (THB)</label>' + qfNumInputHtml({ value: item.unitPriceTHB || 0, action: 'toolingPrice', index: i, idKey: 'tool-price-' + i }) + '</div>' +
+      '<div class="field"><label>Subtotal</label><div class="input" style="background:#f9fafb;color:#6b7280;text-align:right;">' + formatNum(subtotal) + ' THB</div></div>' +
+      '<button class="btn-danger-link" data-click="removeTooling" data-index="' + i + '">Remove</button></div>';
+  });
+  html += '<button class="btn-link" data-click="addTooling">+ Add item</button>';
+  html += '<div style="display:flex;justify-content:flex-end;gap:24px;align-items:end;margin-top:10px;">' +
+    '<div class="field" style="max-width:140px;"><label>Customer Markup (×)</label>' + qfNumInputHtml({ path: 'form.tooling.customerMarkup', decimals: 2 }) + '</div>' +
+    '<div style="text-align:right;"><div style="font-size:11px;color:#9ca3af;">Total</div><div style="font-size:13px;font-weight:700;">' + formatNum(toolingTotal) + ' THB</div></div>' +
+    '<div style="text-align:right;"><div style="font-size:11px;color:#9ca3af;">Customer Price (×' + f.tooling.customerMarkup + ')</div><div style="font-size:13px;font-weight:700;color:#002d72;">' + formatNum(toolingTotal * f.tooling.customerMarkup) + ' THB</div></div>' +
+    '</div></div>';
+
+  html += '</div>'; // end flex-1
+
+  html += '<div style="width:360px;flex-shrink:0;"><div class="summary-box">';
+  html += '<div style="font-size:13px;font-weight:700;color:#002d72;margin-bottom:6px;">Summary</div>';
+  html += qfSumRow('Material Cost', summary.materialCostPerPc) + qfSumRow('Labor Cost', summary.laborCostPerPc) +
+    qfSumRow('Packing Cost', summary.packingCostPerPc) + qfSumRow('Transportation Cost', summary.transportationCostPerPc) +
+    qfSumRow('COGS', summary.cogs, true) +
+    qfSumRow('OH (' + formatNum(f.overheadRate * 100, 0) + '%)', summary.overhead) +
+    qfSumRow('Profit (' + formatNum(f.profitRate * 100, 0) + '%)', summary.profit);
+  html += '<div class="ivory-box"><div style="display:flex;justify-content:space-between;font-size:12px;"><span style="color:#6b7280;">Target Total Price (calculated)</span><span style="font-weight:700;">' + formatNum(summary.totalPrice) + ' THB</span></div></div>';
+
+  html += '<div class="price-box">';
+  html += '<div class="row-between"><span>Final Price to Customer</span><select class="dark-select" data-path="form.customerCurrency">' +
+    ['THB', 'JPY', 'USD'].map(function (c) { return '<option value="' + c + '"' + (f.customerCurrency === c ? ' selected' : '') + '>Quoted in ' + c + '</option>'; }).join('') + '</select></div>';
+  html += qfCurrencyRow('THB', finalPrice, 'currencyThb', f.customerCurrency === 'THB');
+  html += qfCurrencyRow('JPY', jpy, 'currencyJpy', f.customerCurrency === 'JPY');
+  html += qfCurrencyRow('USD', usd, 'currencyUsd', f.customerCurrency === 'USD');
+  html += '<div class="row-between" style="margin-top:8px;"><span>Exchange Rate as of</span>' + qfRateDateSelect(f.exchangeRateRef.effectiveFrom, qfExchangeDateOptions(), 'exchangeDate', true) + '</div>';
+  html += '<div style="text-align:right;font-size:10px;color:#b3cbd8;">1 THB = ' + formatNum(f.exchangeRate.jpyPerThb, 4) + ' JPY / ' + formatNum(f.exchangeRate.usdPerThb, 4) + ' USD</div>';
+  html += '<div style="text-align:center;font-size:11px;color:rgba(255,255,255,0.9);font-weight:500;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.15);">Material ' + formatPct(summary.materialPct) + ' · Gross Margin ' + formatPct(summary.grossMarginPct) + '</div>';
+  html += '<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.15);font-size:10.5px;color:#b3cbd8;">' +
+    '<div class="row-between"><span>Monthly Sales</span><span style="color:#fff;font-weight:500;">' + formatNum(monthlySales, 2) + ' THB</span></div>' +
+    '<div class="row-between"><span>Monthly Gross Margin</span><span style="color:#fff;font-weight:500;">' + formatNum(monthlyMargin, 2) + ' THB</span></div></div>';
+  html += '</div>'; // price-box
+
+  html += '</div></div>'; // summary-box, sidebar
+  html += '</div>'; // flex-gap
+
+  document.getElementById('main').innerHTML = html;
+}
+</script>
