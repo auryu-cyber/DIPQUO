@@ -1,6 +1,6 @@
 # DIPQUO — Google Apps Script 版 セットアップ手順
 
-これまで Next.js / Vercel / GitHub で作っていた見積システムを、**Google スプレッドシート + Google Apps Script (GAS)** だけで動く版に移植したものです。機能・デザインは既存版と同じです（Phase 1 の範囲。詳細は下記「現時点でできること／まだのこと」参照）。
+これまで Next.js / Vercel / GitHub で作っていた見積システムを、**Google スプレッドシート + Google Apps Script (GAS)** だけで動く版に移植したものです。機能・デザインは既存版と同じです（詳細は下記「現時点でできること／まだのこと」参照）。
 
 対象スプレッドシート:
 https://docs.google.com/spreadsheets/d/1iR9XRg-T4v_i_M6Zl-MnHmhW01kW3oine11d-YDbB9Y/edit
@@ -18,7 +18,7 @@ https://script.google.com/a/macros/kunomura.com/s/AKfycbzjDUqa4QZ470V7YmMmU9aC-4
 
 ## 2. ファイルを作成してコードを貼り付ける
 
-デフォルトで `Code.gs` という空ファイルが1つあります。このリポジトリの `gas/` フォルダにある **12個のファイル**（`.gs` 9個 + `.html` 3個）を、同じファイル名で1つずつ作成し、中身をコピー＆ペーストしてください。
+デフォルトで `Code.gs` という空ファイルが1つあります。このリポジトリの `gas/` フォルダにある **15個のファイル**（`.gs` 9個 + `.html` 6個）を、同じファイル名で1つずつ作成し、中身をコピー＆ペーストしてください。
 
 Apps Script エディタでのファイル追加方法:
 - `.gs` ファイル: 左側ファイル一覧の「+」→「スクリプト」→ ファイル名を入力（拡張子 `.gs` は自動で付くので入力不要）
@@ -40,6 +40,9 @@ Apps Script エディタでのファイル追加方法:
 | `gas/Index.html` | `Index` | HTML |
 | `gas/QuotesList.html` | `QuotesList` | HTML |
 | `gas/QuoteForm.html` | `QuoteForm` | HTML |
+| `gas/MastersAdmin.html` | `MastersAdmin` | HTML |
+| `gas/CustomersAdmin.html` | `CustomersAdmin` | HTML |
+| `gas/LogsAdmin.html` | `LogsAdmin` | HTML |
 
 **重要**: ファイル名は上記の通り、拡張子なし・大文字小文字も揃えて入力してください（`Index.html` の中で `include('QuotesList')` のように名前で参照しているため、名前が違うとエラーになります）。
 
@@ -51,7 +54,7 @@ Apps Script エディタでのファイル追加方法:
 
 ## 3. 管理者を設定する
 
-`gas/Schema.gs` の `seedInitialData_` が、初回アクセス時に `Admins` シートへ `a.uryu@kunomura.com` を自動登録します（Claude が読み取り確認済み — スプレッドシートの内容はすでに正しく初期化されています）。他の方も管理者にしたい場合は、スプレッドシートの `Admins` タブを開き、Google アカウントのメールアドレスを1行1件で追加してください（列は `email`）。管理者は「Master Data」「Customers」「Activity Log」メニューが見えるようになります（Phase 1時点ではこれらは編集用の簡易案内のみで、実際の編集はスプレッドシートのタブから行います。詳細は下記）。
+`gas/Schema.gs` の `seedInitialData_` が、初回アクセス時に `Admins` シートへ `a.uryu@kunomura.com` を自動登録します（Claude が読み取り確認済み — スプレッドシートの内容はすでに正しく初期化されています）。他の方も管理者にしたい場合は、スプレッドシートの `Admins` タブを開き、Google アカウントのメールアドレスを1行1件で追加してください（列は `email`）。管理者は「Master Data」「Customers」「Activity Log」メニューが見えるようになり、それぞれの管理画面から直接追加・編集・削除ができます。
 
 **補足（Claudeの操作範囲について）**: このセッションから Google スプレッドシートの内容を読み取ることはできますが、セルを直接書き込む・編集するAPIアクセスは今のところありません。そのため「スプレッドシートに直接編集を」という点は、閲覧・内容確認はできますが、行の追加や値の変更はユーザー側（またはアプリのUI経由）での操作をお願いすることになります。現状は上記の通り初期データが正しく入っており、追加の手作業は不要です。
 
@@ -80,7 +83,7 @@ Claude（この開発アシスタント）は Apps Script のデプロイ操作�
 
 ## Version表示について
 
-サイドバーのロゴ下に「Version 1.1.0 · 2026-08-31」のように表示されます。これは `gas/Code.gs` の `APP_VERSION` / `APP_VERSION_DATE` 定数から出ています。今後 Claude がコードを更新するたびにこの値を更新するので、**画面のVersion表示が最新のものになっているか**で、正しく再デプロイできたかどうかを一目で確認できます（表示が古いままなら、上記の再デプロイ手順がまだ行われていないということです）。
+サイドバーのロゴ下に「Version 1.2.0 · 2026-08-31」のように表示されます。これは `gas/Code.gs` の `APP_VERSION` / `APP_VERSION_DATE` 定数から出ています。今後 Claude がコードを更新するたびにこの値を更新するので、**画面のVersion表示が最新のものになっているか**で、正しく再デプロイできたかどうかを一目で確認できます（表示が古いままなら、上記の再デプロイ手順がまだ行われていないということです）。
 
 ## 5. 動作確認
 
@@ -89,8 +92,9 @@ Claude（この開発アシスタント）は Apps Script のデプロイ操作�
 3. 「+ New Quote」から新規見積を作成し、保存できることを確認してください
 4. スプレッドシートの `Quotes` タブに行が追加されていれば成功です
 
-## 現時点でできること（Phase 1）
+## 現時点でできること
 
+**見積（Quotes）**
 - 見積の一覧表示（顧客ごとにグループ化・最新問い合わせ日順）、検索
 - 見積の新規作成・編集・保存（スプレッドシートへの読み書き）
 - 見積の複製（1件ずつ／一覧からの複数選択一括複製）
@@ -100,17 +104,22 @@ Claude（この開発アシスタント）は Apps Script のデプロイ操作�
 - Final Price to Customer の上書き入力、THB/JPY/USD 相互編集・同サイズ表示、「Quoted in」通貨選択
 - F-D CODE（任意入力）／Product Name（必須）
 - Undo/Redo（Ctrl+Z / Ctrl+Y）
-- Activity Log への保存（フィールド単位の変更差分）はサーバー側で記録されますが、閲覧UIは未実装（下記参照）
 
-## まだのこと（Phase 2・今後追加予定）
+**Master Data（管理者のみ）**
+- Materials / Labor Rate / Packing Costs / Transportation / Exchange Rates の期間別レート一覧表示・追加・編集・削除
+- Materials / Packing Costs は新しいコード（品目）自体の追加にも対応
 
-ナビゲーションの「Master Data」「Customers」「Activity Log」は現在プレースホルダー表示のみです。それまでの間は、スプレッドシートの該当タブを直接編集してください:
+**Customer Master（管理者のみ）**
+- 顧客の一覧表示・追加・編集・削除
 
-- **Master Data**: `Materials` / `LaborRates` / `PackingCosts` / `Transportation` / `ExchangeRates` タブを直接編集（新しい行を追加する形でレート改定を登録）
-- **Customers**: `Customers` タブを直接編集
-- **Activity Log / Login Log**: `ActivityLog` / `LoginLog` タブを直接閲覧
+**Activity Log（管理者のみ）**
+- ログイン履歴、操作履歴（フィールド単位の変更差分含む）の閲覧
 
-これらの管理画面（追加・編集・削除のUI）は次のフェーズで実装します。動作確認後にご連絡いただければ、続けて着手します。
+## まだのこと（今後の候補）
+
+- CSV/Excel エクスポート、見積の一覧をスプレッドシート形式で見比べる画面（Next.js版の `/spreadsheet` 相当）
+- ログの絞り込み・検索（現状は全件表示）
+- 必要に応じて追加のご要望をお知らせください。
 
 ## 既知の制限事項
 
