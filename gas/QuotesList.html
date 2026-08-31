@@ -5,6 +5,10 @@ var QL_SELECTED = {};
 var QL_OPEN_POPOVER = null;
 
 function renderQuotesListView() {
+  if (!permAtLeast('quotes', 'view')) {
+    document.getElementById('main').innerHTML = '<div class="banner banner-error">You do not have access to Quotes. Ask a Super Admin to grant it in User Management.</div>';
+    return;
+  }
   document.getElementById('main').innerHTML = '<div class="empty">Loading quotes…</div>';
   runServer('listQuotes', [], function (quotes) {
     QUOTES_CACHE = quotes || [];
@@ -62,14 +66,15 @@ var QL_STATUS_COLOR = { confirmed: '#0f6fa8', comparison: '#002d72', pending_app
 function qlRender() {
   var groups = qlGroups();
   var selectedCount = Object.keys(QL_SELECTED).filter(function (k) { return QL_SELECTED[k]; }).length;
+  var canEdit = permAtLeast('quotes', 'edit');
 
   var html = '';
   html += '<div class="top-row"><h1 style="margin:0;">Quotes</h1>' +
-    '<a href="#" class="btn btn-accent" id="qlNewQuote">+ New Quote</a></div>';
+    (canEdit ? '<a href="#" class="btn btn-accent" id="qlNewQuote">+ New Quote</a>' : '<span class="badge" style="background:#fbfced;color:#8c756a;border:1px solid #dee2ec;">View Only</span>') + '</div>';
   html += '<div class="toolbar">' +
     '<input type="text" class="input search-input" id="qlSearch" placeholder="Search by customer, product, or material" value="' + escapeHtml(QL_SEARCH) + '">' +
     (selectedCount > 0 ? '<span class="badge" style="background:rgba(65,182,230,0.12);color:#0f6fa8;">' + selectedCount + ' selected</span>' : '') +
-    '<button class="btn btn-outline" id="qlDuplicateSelected" ' + (selectedCount === 0 ? 'disabled' : '') + '>Duplicate Selected</button>' +
+    (canEdit ? '<button class="btn btn-outline" id="qlDuplicateSelected" ' + (selectedCount === 0 ? 'disabled' : '') + '>Duplicate Selected</button>' : '') +
     '</div>';
 
   html += '<div class="section" style="padding:0;overflow:visible;">';
@@ -77,12 +82,12 @@ function qlRender() {
     html += '<div class="empty">No quotes yet. Create one to get started.</div>';
   } else {
     html += '<table><thead><tr>' +
-      '<th style="width:30px;"></th><th>Product</th><th>Material</th><th>Monthly Qty</th><th>Unit Price (THB)</th>' +
-      '<th>Gross Margin</th><th>Inquiry Date</th><th>Updated</th><th>Owner</th><th>Status</th><th></th>' +
+      (canEdit ? '<th style="width:30px;"></th>' : '') + '<th>Product</th><th>Material</th><th>Monthly Qty</th><th>Unit Price (THB)</th>' +
+      '<th>Gross Margin</th><th>Inquiry Date</th><th>Updated</th><th>Owner</th><th>Status</th>' + (canEdit ? '<th></th>' : '') +
       '</tr></thead><tbody>';
     groups.forEach(function (g) {
       var rec = qlCustomerRecord(g.customer);
-      html += '<tr class="group-row"><td colspan="11" style="position:relative;">' +
+      html += '<tr class="group-row"><td colspan="' + (canEdit ? 11 : 9) + '" style="position:relative;">' +
         '<a href="#" class="qlCustomerToggle" data-customer="' + escapeHtml(g.customer) + '">' + escapeHtml(g.customer) + '</a>' +
         '<span style="margin-left:8px;font-weight:400;color:#6b7280;font-size:11px;">' + g.quotes.length + ' quote' + (g.quotes.length === 1 ? '' : 's') + '</span>';
       if (QL_OPEN_POPOVER === g.customer) {
@@ -101,7 +106,7 @@ function qlRender() {
         var key = qlRowKey(q);
         var checked = !!QL_SELECTED[key];
         html += '<tr style="' + (checked ? 'background:rgba(65,182,230,0.06);' : '') + '">' +
-          '<td><input type="checkbox" class="qlCheck" data-key="' + escapeHtml(key) + '" ' + (checked ? 'checked' : '') + '></td>' +
+          (canEdit ? '<td><input type="checkbox" class="qlCheck" data-key="' + escapeHtml(key) + '" ' + (checked ? 'checked' : '') + '></td>' : '') +
           '<td><a href="#" class="qlOpen knt-navy" style="font-weight:500;" data-id="' + escapeHtml(q.id) + '" data-variant="' + escapeHtml(q.variant) + '">' +
           escapeHtml(q.productName) + (q.variant !== 'current' ? ' (' + escapeHtml(q.variant) + ')' : '') + '</a></td>' +
           '<td>' + escapeHtml(q.material) + '</td>' +
@@ -112,7 +117,7 @@ function qlRender() {
           '<td style="color:#9ca3af;">' + (q.updatedAt ? new Date(q.updatedAt).toLocaleDateString() : '-') + '</td>' +
           '<td>' + escapeHtml(q.updatedBy) + '</td>' +
           '<td><span class="badge" style="background:rgba(0,0,0,0.04);color:' + (QL_STATUS_COLOR[q.status] || '#374151') + ';">' + (QL_STATUS_LABEL[q.status] || q.status) + '</span></td>' +
-          '<td><a href="#" class="btn btn-outline qlDuplicateOne" style="padding:4px 10px;font-size:11px;" data-id="' + escapeHtml(q.id) + '" data-variant="' + escapeHtml(q.variant) + '">Duplicate</a></td>' +
+          (canEdit ? '<td><a href="#" class="btn btn-outline qlDuplicateOne" style="padding:4px 10px;font-size:11px;" data-id="' + escapeHtml(q.id) + '" data-variant="' + escapeHtml(q.variant) + '">Duplicate</a></td>' : '') +
           '</tr>';
       });
     });
@@ -125,10 +130,12 @@ function qlRender() {
 }
 
 function qlWireEvents() {
-  document.getElementById('qlNewQuote').onclick = function (e) { e.preventDefault(); navigate('quote-form', {}); };
+  var newQuoteBtn = document.getElementById('qlNewQuote');
+  if (newQuoteBtn) newQuoteBtn.onclick = function (e) { e.preventDefault(); navigate('quote-form', {}); };
   var search = document.getElementById('qlSearch');
   search.oninput = function () { QL_SEARCH = search.value; qlRender(); search.focus(); search.setSelectionRange(search.value.length, search.value.length); };
-  document.getElementById('qlDuplicateSelected').onclick = function () {
+  var dupBtn = document.getElementById('qlDuplicateSelected');
+  if (dupBtn) dupBtn.onclick = function () {
     var ids = Object.keys(QL_SELECTED).filter(function (k) { return QL_SELECTED[k]; });
     if (ids.length === 0) return;
     var pairs = ids.map(function (k) { return k.replace('::', '/'); });

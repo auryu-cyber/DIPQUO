@@ -18,7 +18,7 @@ https://script.google.com/a/macros/kunomura.com/s/AKfycbzjDUqa4QZ470V7YmMmU9aC-4
 
 ## 2. ファイルを作成してコードを貼り付ける
 
-デフォルトで `Code.gs` という空ファイルが1つあります。このリポジトリの `gas/` フォルダにある **15個のファイル**（`.gs` 9個 + `.html` 6個）を、同じファイル名で1つずつ作成し、中身をコピー＆ペーストしてください。
+デフォルトで `Code.gs` という空ファイルが1つあります。このリポジトリの `gas/` フォルダにある **17個のファイル**（`.gs` 10個 + `.html` 7個）を、同じファイル名で1つずつ作成し、中身をコピー＆ペーストしてください。
 
 Apps Script エディタでのファイル追加方法:
 - `.gs` ファイル: 左側ファイル一覧の「+」→「スクリプト」→ ファイル名を入力（拡張子 `.gs` は自動で付くので入力不要）
@@ -37,12 +37,14 @@ Apps Script エディタでのファイル追加方法:
 | `gas/Customers.gs` | `Customers` | スクリプト |
 | `gas/Logs.gs` | `Logs` | スクリプト |
 | `gas/Quotes.gs` | `Quotes` | スクリプト |
+| `gas/Permissions.gs` | `Permissions` | スクリプト |
 | `gas/Index.html` | `Index` | HTML |
 | `gas/QuotesList.html` | `QuotesList` | HTML |
 | `gas/QuoteForm.html` | `QuoteForm` | HTML |
 | `gas/MastersAdmin.html` | `MastersAdmin` | HTML |
 | `gas/CustomersAdmin.html` | `CustomersAdmin` | HTML |
 | `gas/LogsAdmin.html` | `LogsAdmin` | HTML |
+| `gas/UsersAdmin.html` | `UsersAdmin` | HTML |
 
 **重要**: ファイル名は上記の通り、拡張子なし・大文字小文字も揃えて入力してください（`Index.html` の中で `include('QuotesList')` のように名前で参照しているため、名前が違うとエラーになります）。
 
@@ -52,9 +54,21 @@ Apps Script エディタでのファイル追加方法:
 3. 左側ファイル一覧に `appsscript.json` が表示されるのでクリック
 4. 中身を `gas/appsscript.json` の内容に置き換える
 
-## 3. 管理者を設定する
+## 3. ユーザー管理・権限について
 
-`gas/Schema.gs` の `seedInitialData_` が、初回アクセス時に `Admins` シートへ `a.uryu@kunomura.com` を自動登録します（Claude が読み取り確認済み — スプレッドシートの内容はすでに正しく初期化されています）。他の方も管理者にしたい場合は、スプレッドシートの `Admins` タブを開き、Google アカウントのメールアドレスを1行1件で追加してください（列は `email`）。管理者は「Master Data」「Customers」「Activity Log」メニューが見えるようになり、それぞれの管理画面から直接追加・編集・削除ができます。
+`gas/Schema.gs` の `seedInitialData_` が、初回アクセス時に `Admins` シートへ `a.uryu@kunomura.com` を **Super Admin** として自動登録します（Claude が読み取り確認済み — スプレッドシートの内容はすでに正しく初期化されています）。
+
+アクセス権は2段階です:
+
+- **Super Admin**（`Admins` シートに登録された人）: すべてのページ（Quotes / Master Data / Customers / Activity Log / User Management）に無条件でフル編集権限を持ちます。ロックアウトを防ぐため、自分自身のSuper Admin権限は画面上から外せません。
+- **一般ユーザー**: ページごとに「None（非表示）／View（閲覧のみ）／Edit（編集可）」を個別に設定できます。何も設定していない場合のデフォルトは、Quotes = Edit（今まで通り誰でも見積作成・編集可）、Master Data / Customers / Activity Log = None（今まで通り非表示）です。
+
+権限は左メニューの **「User Management」**（Super Adminにのみ表示）から設定します:
+1. 上部の「Add a user」でメールアドレスを入力して「Add」（初回ログイン前でも先に権限を用意できます。すでにログイン済みの人は自動的に一覧に出ます）
+2. 一覧の各ユーザーの行で、ページごとに None/View/Edit をプルダウンで選択（変更は即座に保存されます）
+3. 「Super Admin」列のチェックボックスで、その人をSuper Adminに昇格／降格できます
+
+これで、例えば「特定のメンバーだけMaster Dataを編集できるようにする」「ある人にはQuotesを閲覧のみにする」といった細かい制御が可能です。
 
 **補足（Claudeの操作範囲について）**: このセッションから Google スプレッドシートの内容を読み取ることはできますが、セルを直接書き込む・編集するAPIアクセスは今のところありません。そのため「スプレッドシートに直接編集を」という点は、閲覧・内容確認はできますが、行の追加や値の変更はユーザー側（またはアプリのUI経由）での操作をお願いすることになります。現状は上記の通り初期データが正しく入っており、追加の手作業は不要です。
 
@@ -83,7 +97,7 @@ Claude（この開発アシスタント）は Apps Script のデプロイ操作�
 
 ## Version表示について
 
-サイドバーのロゴ下に「Version 1.3.0 · 2026-08-31」のように表示されます。これは `gas/Code.gs` の `APP_VERSION` / `APP_VERSION_DATE` 定数から出ています。今後 Claude がコードを更新するたびにこの値を更新するので、**画面のVersion表示が最新のものになっているか**で、正しく再デプロイできたかどうかを一目で確認できます（表示が古いままなら、上記の再デプロイ手順がまだ行われていないということです）。
+サイドバーのロゴ下に「Version 1.4.0 · 2026-08-31」のように表示されます。これは `gas/Code.gs` の `APP_VERSION` / `APP_VERSION_DATE` 定数から出ています。今後 Claude がコードを更新するたびにこの値を更新するので、**画面のVersion表示が最新のものになっているか**で、正しく再デプロイできたかどうかを一目で確認できます（表示が古いままなら、上記の再デプロイ手順がまだ行われていないということです）。
 
 ## 5. 動作確認
 
@@ -106,16 +120,21 @@ Claude（この開発アシスタント）は Apps Script のデプロイ操作�
 - Customer Name は Customer Master からの検索付きプルダウン選択（部分一致で絞り込み）。未登録の名前を入力した場合は「新規顧客として追加」でその場で Customer Master に登録可能（管理者でなくても名前だけの新規登録は可能。業種等の詳細追加は管理者のみ）
 - Undo/Redo（Ctrl+Z / Ctrl+Y）
 
-**Master Data（管理者のみ）**
+**Master Data**（アクセス権は User Management で設定。デフォルトは非表示）
 - Materials / Labor Rate / Packing Costs / Transportation / Exchange Rates の期間別レート一覧表示・追加・編集・削除
 - Materials / Packing Costs は新しいコード（品目）自体の追加にも対応
 - 既存の期間レートを「Duplicate」で複製し、値を調整してから新しい期間として登録可能
+- View権限のみのユーザーは一覧が見えるだけで追加・編集・削除ボタンは表示されません
 
-**Customer Master（管理者のみ）**
+**Customer Master**（アクセス権は User Management で設定。デフォルトは非表示）
 - 顧客の一覧表示・追加・編集・削除
 
-**Activity Log（管理者のみ）**
+**Activity Log**（アクセス権は User Management で設定。デフォルトは非表示）
 - ログイン履歴、操作履歴（フィールド単位の変更差分含む）の閲覧
+
+**User Management**（Super Adminのみ）
+- アカウント別にQuotes / Master Data / Customers / Activity LogそれぞれのNone/View/Edit権限を設定
+- Super Admin権限の付与・剥奪
 
 ## まだのこと（今後の候補）
 

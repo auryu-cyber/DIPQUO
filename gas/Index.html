@@ -241,15 +241,28 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 });
 
+/* ============================== Permissions ============================== */
+var PERM_RANK = { none: 0, view: 1, edit: 2 };
+/** Resolved level ('none'/'view'/'edit') for the current user on a page ('quotes'/'masters'/
+ *  'customers'/'logs'). Super Admins get 'edit' everywhere regardless of USER.permissions. */
+function permLevel(page) {
+  if (USER.isAdmin) return 'edit';
+  return (USER.permissions && USER.permissions[page]) || 'none';
+}
+function permAtLeast(page, minLevel) { return PERM_RANK[permLevel(page)] >= PERM_RANK[minLevel]; }
+
 function renderNav() {
   var items = [
-    { view: 'quotes-list', label: 'Quotes' },
-    { view: 'quote-form-new', label: 'New Quote' },
-    { view: 'masters', label: 'Master Data', admin: true },
-    { view: 'customers', label: 'Customers', admin: true },
-    { view: 'logs', label: 'Activity Log', admin: true }
+    { view: 'quotes-list', label: 'Quotes', page: 'quotes', need: 'view' },
+    { view: 'quote-form-new', label: 'New Quote', page: 'quotes', need: 'edit' },
+    { view: 'masters', label: 'Master Data', page: 'masters', need: 'view' },
+    { view: 'customers', label: 'Customers', page: 'customers', need: 'view' },
+    { view: 'logs', label: 'Activity Log', page: 'logs', need: 'view' },
+    { view: 'users', label: 'User Management', adminOnly: true }
   ];
-  var html = items.filter(function (i) { return !i.admin || USER.isAdmin; }).map(function (i) {
+  var html = items.filter(function (i) {
+    return i.adminOnly ? USER.isAdmin : permAtLeast(i.page, i.need);
+  }).map(function (i) {
     var active = VIEW.name === i.view || (i.view === 'quote-form-new' && VIEW.name === 'quote-form');
     return '<a href="#" class="' + (active ? 'active' : '') + '" data-nav="' + i.view + '">' + i.label + '</a>';
   }).join('');
@@ -273,6 +286,7 @@ function navigate(name, params) {
   else if (name === 'masters') renderMastersView();
   else if (name === 'customers') renderCustomersView();
   else if (name === 'logs') renderLogsView();
+  else if (name === 'users') renderUsersView();
 }
 
 </script>
@@ -281,3 +295,4 @@ function navigate(name, params) {
 <?!= include('MastersAdmin'); ?>
 <?!= include('CustomersAdmin'); ?>
 <?!= include('LogsAdmin'); ?>
+<?!= include('UsersAdmin'); ?>

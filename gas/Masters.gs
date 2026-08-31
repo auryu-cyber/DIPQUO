@@ -50,7 +50,7 @@ function getQuoteFormMasters() {
 }
 
 function addMasterRecord(type, code, data) {
-  var email = requireAdmin_();
+  var email = requirePermission_('masters', 'edit');
   code = String(code || '').trim();
   if (!code) throw new Error('Code is required.');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(data.effectiveFrom)) throw new Error('Effective From must be a YYYY-MM-DD date.');
@@ -70,7 +70,7 @@ function addMasterRecord(type, code, data) {
 }
 
 function updateMasterRecord(type, code, originalEffectiveFrom, data) {
-  var email = requireAdmin_();
+  var email = requirePermission_('masters', 'edit');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(data.effectiveFrom)) throw new Error('Effective From must be a YYYY-MM-DD date.');
 
   var lock = LockService.getScriptLock();
@@ -91,7 +91,7 @@ function updateMasterRecord(type, code, originalEffectiveFrom, data) {
 }
 
 function deleteMasterRecord(type, code, effectiveFrom) {
-  var email = requireAdmin_();
+  var email = requirePermission_('masters', 'edit');
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {

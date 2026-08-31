@@ -10,8 +10,13 @@ var SHEETS = {
   CUSTOMERS: 'Customers',
   ACTIVITY_LOG: 'ActivityLog',
   LOGIN_LOG: 'LoginLog',
-  ADMINS: 'Admins'
+  ADMINS: 'Admins',
+  PERMISSIONS: 'Permissions'
 };
+
+/** Pages a per-account permission can be granted on. Each cell in the Permissions sheet
+ *  is '', 'view', or 'edit' — '' means "use the default" (see resolvePermission_ in Auth.gs). */
+var PERMISSION_PAGES = ['quotes', 'masters', 'customers', 'logs'];
 
 var HEADERS = {};
 HEADERS[SHEETS.QUOTES] = ['id', 'variant', 'productName', 'customerName', 'inquiryDate', 'material',
@@ -25,6 +30,7 @@ HEADERS[SHEETS.CUSTOMERS] = ['id', 'customerName', 'industry', 'businessType', '
 HEADERS[SHEETS.ACTIVITY_LOG] = ['at', 'user', 'action', 'target', 'detail'];
 HEADERS[SHEETS.LOGIN_LOG] = ['at', 'user', 'result'];
 HEADERS[SHEETS.ADMINS] = ['email'];
+HEADERS[SHEETS.PERMISSIONS] = ['email', 'quotes', 'masters', 'customers', 'logs', 'updatedAt', 'updatedBy'];
 
 /** Creates any missing tabs, fixes headers, and formats data columns as plain text
  *  (Sheets otherwise auto-converts "2026-01-01"-looking strings into Date cells, which

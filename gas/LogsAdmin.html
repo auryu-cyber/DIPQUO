@@ -3,6 +3,10 @@
 var LA_ACTION_COLOR = { edited: '#002d72', exported: '#0f6fa8', created: '#8c756a', access_denied: '#c73a3b' };
 
 function renderLogsView() {
+  if (!permAtLeast('logs', 'view')) {
+    document.getElementById('main').innerHTML = '<div class="banner banner-error">You do not have access to the Activity Log. Ask a Super Admin to grant it in User Management.</div>';
+    return;
+  }
   document.getElementById('main').innerHTML = '<div class="empty">Loading…</div>';
   runServer('listLoginLog', [], function (logins) {
     runServer('listActivityLog', [], function (activity) {
@@ -14,7 +18,7 @@ function renderLogsView() {
 function laRender(logins, activity) {
   var html = '';
   html += '<div class="top-row"><div style="display:flex;align-items:center;gap:10px;"><h1 style="margin:0;">Activity Log</h1>' +
-    '<span class="badge" style="background:#fbfced;color:#8c756a;border:1px solid #dee2ec;">Admin Only</span></div></div>';
+    '<span class="badge" style="background:#fbfced;color:#8c756a;border:1px solid #dee2ec;">Restricted</span></div></div>';
   html += '<div class="flex-gap" style="align-items:flex-start;">';
 
   html += '<div class="section flex-1" style="padding:0;overflow:hidden;">';

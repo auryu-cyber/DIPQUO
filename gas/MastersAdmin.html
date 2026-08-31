@@ -20,6 +20,10 @@ var MA_TYPE_LABEL = { 'materials': 'Materials', 'labor-rates': 'Labor Rate', 'pa
 var MA_TYPE_ORDER = ['materials', 'labor-rates', 'packing-costs', 'transportation', 'exchange-rates'];
 
 function renderMastersView() {
+  if (!permAtLeast('masters', 'view')) {
+    document.getElementById('main').innerHTML = '<div class="banner banner-error">You do not have access to Master Data. Ask a Super Admin to grant it in User Management.</div>';
+    return;
+  }
   document.getElementById('main').innerHTML = '<div class="empty">Loading…</div>';
   runServer('getQuoteFormMasters', [], function (masters) {
     MA_DATA = masters;
@@ -136,13 +140,14 @@ function maRenderItem_(type, code, displayLabel, history) {
   var current = maCurrent(history);
   var addOpen = !!MA_OPEN_ADD[key];
   var error = MA_ERROR[key];
+  var canEdit = permAtLeast('masters', 'edit');
 
   var html = '<div class="ma-item">';
   html += '<div class="row-between">';
   html += '<div><div class="ma-item-title">' + escapeHtml(displayLabel) + '</div>' +
     '<div class="ma-item-sub">' + history.length + ' period rate' + (history.length === 1 ? '' : 's') + ' on file' +
     (current ? ' · currently ' + escapeHtml(current.effectiveFrom) : '') + '</div></div>';
-  html += '<button class="btn-link" data-click="maToggleAdd" data-type="' + type + '" data-code="' + escapeHtml(code) + '">' + (addOpen ? 'Cancel' : '+ Add rate for a period') + '</button>';
+  if (canEdit) html += '<button class="btn-link" data-click="maToggleAdd" data-type="' + type + '" data-code="' + escapeHtml(code) + '">' + (addOpen ? 'Cancel' : '+ Add rate for a period') + '</button>';
   html += '</div>';
 
   if (error) html += '<div class="ma-error">' + escapeHtml(error) + '</div>';
@@ -153,7 +158,7 @@ function maRenderItem_(type, code, displayLabel, history) {
       fields.map(function (f) { return '<th style="text-align:right;">' + escapeHtml(f.label) + '</th>'; }).join('') +
       '<th>Recorded By</th><th>Note</th><th style="text-align:right;">Actions</th></tr></thead><tbody>';
     history.forEach(function (h) {
-      var isEditing = MA_EDIT_KEY === (key + '::' + h.effectiveFrom);
+      var isEditing = canEdit && MA_EDIT_KEY === (key + '::' + h.effectiveFrom);
       if (isEditing) {
         var p = 'ma-edit-' + key;
         html += '<tr style="background:#fbfced;">' +
@@ -174,9 +179,11 @@ function maRenderItem_(type, code, displayLabel, history) {
           '<td style="color:#9ca3af;">' + escapeHtml(h.recordedBy || '') + '</td>' +
           '<td style="color:#9ca3af;">' + escapeHtml(h.note || '') + '</td>' +
           '<td style="text-align:right;white-space:nowrap;">' +
-          '<button class="btn-link" data-click="maDuplicate" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '">Duplicate</button> ' +
-          '<button class="btn-link" data-click="maStartEdit" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '">Edit</button> ' +
-          '<button class="btn-danger-link" data-click="maDelete" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '">Delete</button></td></tr>';
+          (canEdit ?
+            '<button class="btn-link" data-click="maDuplicate" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '">Duplicate</button> ' +
+            '<button class="btn-link" data-click="maStartEdit" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '">Edit</button> ' +
+            '<button class="btn-danger-link" data-click="maDelete" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '">Delete</button>' : '') +
+          '</td></tr>';
       }
     });
     html += '</tbody></table></div>';
@@ -228,8 +235,9 @@ function maRenderNewCode_(type) {
 
 function maRender() {
   var html = '';
+  var badgeText = permAtLeast('masters', 'edit') ? 'Edit Access' : 'View Only';
   html += '<div class="top-row"><div style="display:flex;align-items:center;gap:10px;"><h1 style="margin:0;">Master Data</h1>' +
-    '<span class="badge" style="background:#fbfced;color:#8c756a;border:1px solid #dee2ec;">Admin Only</span></div></div>';
+    '<span class="badge" style="background:#fbfced;color:#8c756a;border:1px solid #dee2ec;">' + badgeText + '</span></div></div>';
 
   MA_TYPE_ORDER.forEach(function (type) {
     var groups = maGroupsForType(type);
@@ -239,7 +247,7 @@ function maRender() {
         (type === 'labor-rates' ? 'Hourly charge' : type === 'transportation' ? 'Vehicle / Fuel / Qty per trip' : 'JPY / USD per THB');
       html += maRenderItem_(type, g.code, displayLabel, g.history);
     });
-    if (type === 'materials' || type === 'packing-costs') html += maRenderNewCode_(type);
+    if ((type === 'materials' || type === 'packing-costs') && permAtLeast('masters', 'edit')) html += maRenderNewCode_(type);
     html += '</div>';
   });
 

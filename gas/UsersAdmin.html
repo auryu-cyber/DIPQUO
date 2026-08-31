@@ -1,0 +1,136 @@
+<script>
+/* ============================== User Management view ============================== */
+var UM_DATA = [];
+var UM_ERROR = null;
+var UM_LEVELS = [['', 'Default'], ['none', 'None'], ['view', 'View'], ['edit', 'Edit']];
+var UM_PAGES = [['quotes', 'Quotes'], ['masters', 'Master Data'], ['customers', 'Customers'], ['logs', 'Activity Log']];
+
+function renderUsersView() {
+  document.getElementById('main').innerHTML = '<div class="empty">Loading…</div>';
+  runServer('listUserPermissions', [], function (users) {
+    UM_DATA = users || [];
+    UM_ERROR = null;
+    umRender();
+  });
+}
+
+function umPatchLocal_(email, patch) {
+  UM_DATA.forEach(function (u) {
+    if (u.email === email) {
+      Object.keys(patch).forEach(function (k) { u[k] = patch[k]; });
+    }
+  });
+}
+
+function umAddUser() {
+  var input = document.getElementById('um-add-email');
+  var email = input.value.trim().toLowerCase();
+  if (!email) return;
+  UM_ERROR = null;
+  runServer('addUserByEmail', [email], function () {
+    renderUsersView();
+  }, function (err) {
+    UM_ERROR = err && err.message ? err.message : String(err);
+    umRender();
+  });
+}
+
+function umChangePermission(email, page, level) {
+  runServer('saveUserPermission', [email, page, level], function () {
+    var patch = {};
+    patch[page] = level;
+    umPatchLocal_(email, patch);
+    umRender();
+  }, function (err) {
+    alert('Error: ' + (err && err.message ? err.message : err));
+    renderUsersView();
+  });
+}
+
+function umToggleAdmin(email, isAdmin) {
+  runServer('setUserAdmin', [email, isAdmin], function () {
+    umPatchLocal_(email, { isAdmin: isAdmin });
+    umRender();
+  }, function (err) {
+    alert('Error: ' + (err && err.message ? err.message : err));
+    renderUsersView();
+  });
+}
+
+function umRender() {
+  var html = '';
+  html += '<div class="top-row"><div style="display:flex;align-items:center;gap:10px;"><h1 style="margin:0;">User Management</h1>' +
+    '<span class="badge" style="background:#fbfced;color:#8c756a;border:1px solid #dee2ec;">Super Admin Only</span></div></div>';
+
+  html += '<div class="section">';
+  html += '<div class="section-title">Add a user</div>';
+  html += '<div style="display:flex;gap:10px;align-items:end;">' +
+    '<div class="field" style="flex:1;max-width:320px;"><label>Email</label><input type="text" id="um-add-email" class="input" placeholder="name@kunomura.com"></div>' +
+    '<button class="btn btn-primary" data-click="umAdd">Add</button></div>';
+  html += '<div style="font-size:10px;color:#9ca3af;margin-top:6px;">Pre-registers someone before their first login so you can grant access in advance. Anyone who has already signed in appears below automatically.</div>';
+  if (UM_ERROR) html += '<div class="ma-error">' + escapeHtml(UM_ERROR) + '</div>';
+  html += '</div>';
+
+  html += '<div class="section" style="padding:0;overflow:visible;">';
+  if (UM_DATA.length === 0) {
+    html += '<div class="empty">No users yet.</div>';
+  } else {
+    html += '<div style="overflow-x:auto;"><table><thead><tr><th>Email</th><th style="text-align:center;">Super Admin</th>' +
+      UM_PAGES.map(function (p) { return '<th style="text-align:center;">' + escapeHtml(p[1]) + '</th>'; }).join('') + '</tr></thead><tbody>';
+    UM_DATA.forEach(function (u) {
+      html += '<tr>';
+      html += '<td style="font-weight:500;color:#002d72;">' + escapeHtml(u.email) + '</td>';
+      html += '<td style="text-align:center;"><input type="checkbox" data-role="admin-toggle" data-email="' + escapeHtml(u.email) + '" ' + (u.isAdmin ? 'checked' : '') + '></td>';
+      UM_PAGES.forEach(function (p) {
+        if (u.isAdmin) {
+          html += '<td style="text-align:center;color:#9ca3af;font-size:11px;">Edit (Super Admin)</td>';
+        } else {
+          var val = u[p[0]] || '';
+          html += '<td style="text-align:center;"><select class="input" style="width:auto;padding:4px 6px;font-size:11px;" data-role="perm-select" data-email="' + escapeHtml(u.email) + '" data-page="' + p[0] + '">' +
+            UM_LEVELS.map(function (lv) { return '<option value="' + lv[0] + '"' + (lv[0] === val ? ' selected' : '') + '>' + escapeHtml(lv[1]) + '</option>'; }).join('') +
+            '</select></td>';
+        }
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  html += '</div>';
+
+  html += '<div class="section" style="font-size:11px;color:#9ca3af;">' +
+    '<div style="font-weight:500;color:#6b7280;margin-bottom:4px;">Levels</div>' +
+    '<div><strong>Default</strong> — no explicit setting: Quotes defaults to Edit, all other pages default to None (hidden).</div>' +
+    '<div><strong>None</strong> — page hidden from the nav, access denied if called directly.</div>' +
+    '<div><strong>View</strong> — page visible, read-only (no add/edit/delete).</div>' +
+    '<div><strong>Edit</strong> — full access.</div>' +
+    '<div style="margin-top:6px;"><strong>Super Admin</strong> — Edit access to every page, including User Management itself, regardless of the settings above.</div>' +
+    '</div>';
+
+  document.getElementById('main').innerHTML = html;
+  umWireEvents();
+}
+
+function umWireEvents() {
+  var addBtn = document.querySelector('[data-click="umAdd"]');
+  if (addBtn) addBtn.onclick = function (e) { e.preventDefault(); umAddUser(); };
+
+  Array.prototype.forEach.call(document.querySelectorAll('[data-role="admin-toggle"]'), function (el) {
+    el.onchange = function () {
+      var makeAdmin = el.checked;
+      if (!makeAdmin && el.getAttribute('data-email') === (USER.email || '').toLowerCase()) {
+        alert('You cannot remove your own Super Admin access.');
+        el.checked = true;
+        return;
+      }
+      if (!makeAdmin && !confirm('Remove Super Admin access for ' + el.getAttribute('data-email') + '?')) {
+        el.checked = true;
+        return;
+      }
+      umToggleAdmin(el.getAttribute('data-email'), makeAdmin);
+    };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-role="perm-select"]'), function (el) {
+    el.onchange = function () { umChangePermission(el.getAttribute('data-email'), el.getAttribute('data-page'), el.value); };
+  });
+}
+</script>

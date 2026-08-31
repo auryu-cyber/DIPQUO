@@ -10,15 +10,16 @@ function listCustomers() {
 
 /**
  * Any signed-in user may register a brand-new customer with just a name (needed so a
- * salesperson can add a new customer inline while creating a quote, without admin rights).
- * Editing an existing customer, or setting industry/businessType/product on creation,
- * still requires admin — that richer editing only happens from the Customers admin page.
+ * salesperson can add a new customer inline while creating a quote, regardless of their
+ * 'customers' page permission). Editing an existing customer, or setting
+ * industry/businessType/product on creation, requires customers='edit' (or Super Admin) —
+ * that richer editing only happens from the Customers admin page.
  */
 function saveCustomer(input) {
   var email = requireUser_();
   var name = String(input.customerName || '').trim();
   if (!name) throw new Error('Customer Name is required.');
-  var admin = isAdminEmail_(email);
+  var canEdit = resolvePermission_(email, 'customers') === 'edit';
 
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
@@ -26,10 +27,10 @@ function saveCustomer(input) {
     var id = input.id || slugify_(name);
     var existing = findRow_(SHEETS.CUSTOMERS, function (r) { return r.id === id; });
 
-    if (!admin) {
-      if (existing) throw new Error('Admin access required to edit an existing customer.');
+    if (!canEdit) {
+      if (existing) throw new Error('You do not have edit access to Customers.');
       if (input.industry || input.businessType || input.product) {
-        throw new Error('Admin access required to set customer details. You can add the customer name; an admin can fill in the rest later.');
+        throw new Error('You do not have edit access to Customers. You can add the customer name; someone with Customers edit access can fill in the rest later.');
       }
     }
 
@@ -51,7 +52,7 @@ function saveCustomer(input) {
 }
 
 function deleteCustomer(id) {
-  var email = requireAdmin_();
+  var email = requirePermission_('customers', 'edit');
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {

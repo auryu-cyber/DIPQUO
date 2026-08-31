@@ -8,6 +8,7 @@ var QF_UI = { editingField: null, editingText: '' };
 var QF_HISTORY = { past: [], future: [] };
 var QF_EVENTS_WIRED = false;
 var QF_SUPPRESS_FOCUSIN = false; // true only while qfRenderPreserveFocus is programmatically refocusing, to avoid focusin handlers re-triggering themselves
+var QF_CUSTOMER_JUST_SELECTED = false; // one-shot: force the customer dropdown closed on the render right after a click-selection
 
 document.addEventListener('keydown', function (e) {
   if (VIEW.name !== 'quote-form') return;
@@ -123,6 +124,14 @@ function withDateFallbacksClient(q) {
 }
 
 function renderQuoteFormView(params) {
+  if (!permAtLeast('quotes', 'view')) {
+    document.getElementById('main').innerHTML = '<div class="banner banner-error">You do not have access to Quotes. Ask a Super Admin to grant it in User Management.</div>';
+    return;
+  }
+  if (!params.id && !params.copyFrom && !permAtLeast('quotes', 'edit')) {
+    document.getElementById('main').innerHTML = '<div class="banner banner-error">You have view-only access to Quotes and cannot create a new one.</div>';
+    return;
+  }
   document.getElementById('main').innerHTML = '<div class="empty">Loading…</div>';
   if (params.id && params.variant) {
     runServer('getQuote', [params.id, params.variant], function (quote) {
@@ -308,6 +317,13 @@ function qfWireDelegatedEvents() {
     if (t.dataset.action) qfHandleAction(t.dataset.action, t.value, t);
     else if (t.dataset.path !== undefined) { setByPath(QF, t.dataset.path, t.value); qfCommit(); }
   });
+  // Prevent the default mousedown behavior on dropdown options so clicking one never blurs
+  // (or otherwise disturbs) the input it belongs to before the click handler below runs.
+  main.addEventListener('mousedown', function (e) {
+    if (VIEW.name !== 'quote-form') return;
+    var t = e.target.closest ? e.target.closest('.ac-option') : null;
+    if (t) e.preventDefault();
+  });
   main.addEventListener('click', function (e) {
     if (VIEW.name !== 'quote-form') return;
     var t = e.target.closest ? e.target.closest('[data-click]') : null;
@@ -320,13 +336,13 @@ function qfWireDelegatedEvents() {
     else if (click === 'duplicate') { navigate('quote-form', { copyFrom: QF.initialQuote.id + '/' + QF.initialQuote.variant }); }
     else if (click === 'selectCustomer') {
       QF.form.customerName = t.getAttribute('data-value');
-      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      QF_CUSTOMER_JUST_SELECTED = true;
       qfCommit();
     }
     else if (click === 'addNewCustomer') {
       var newCustomerName = t.getAttribute('data-value');
       QF.form.customerName = newCustomerName;
-      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      QF_CUSTOMER_JUST_SELECTED = true;
       runServer('saveCustomer', [{ customerName: newCustomerName }], function () {
         if (!CUSTOMERS.some(function (c) { return String(c.customerName).toLowerCase() === newCustomerName.toLowerCase(); })) {
           CUSTOMERS.push({ customerName: newCustomerName, industry: '', businessType: '', product: '' });
@@ -382,12 +398,12 @@ function qfNumInputHtml(opts) {
 }
 function qfFieldText(label, path, placeholder) {
   var val = getByPath(QF, path) || '';
-  return '<div class="field"><label>' + escapeHtml(label) + '</label><input type="text" class="input" data-path="' + escapeHtml(path) + '" placeholder="' + escapeHtml(placeholder || '') + '" value="' + escapeHtml(val) + '"></div>';
+  return '<div class="field"><label>' + escapeHtml(label) + '</label><input type="text" class="input" id="' + qfNumFieldId(path) + '" data-path="' + escapeHtml(path) + '" placeholder="' + escapeHtml(placeholder || '') + '" value="' + escapeHtml(val) + '"></div>';
 }
 function qfFieldSelect(label, path, options) {
   var val = getByPath(QF, path);
   var opts = options.map(function (o) { return '<option value="' + escapeHtml(o[0]) + '"' + (o[0] === val ? ' selected' : '') + '>' + escapeHtml(o[1]) + '</option>'; }).join('');
-  return '<div class="field"><label>' + escapeHtml(label) + '</label><select class="input" data-path="' + escapeHtml(path) + '">' + opts + '</select></div>';
+  return '<div class="field"><label>' + escapeHtml(label) + '</label><select class="input" id="' + qfNumFieldId(path) + '" data-path="' + escapeHtml(path) + '">' + opts + '</select></div>';
 }
 function qfFieldNum(label, path, decimals) {
   return '<div class="field"><label>' + escapeHtml(label) + '</label>' + qfNumInputHtml({ path: path, decimals: decimals }) + '</div>';
@@ -424,7 +440,7 @@ function qfRateDateSelect(currentValue, options, action, dark) {
   options.forEach(function (d) { opts += '<option value="' + escapeHtml(d) + '"' + (d === currentValue ? ' selected' : '') + '>' + escapeHtml(d) + '</option>'; });
   var spanClass = dark ? 'rate-date-select dark-rate' : 'rate-date-select';
   var selectClass = dark ? 'dark-select' : '';
-  return '<span class="' + spanClass + '">Rate as of<select class="' + selectClass + '" data-action="' + action + '">' + opts + '</select></span>';
+  return '<span class="' + spanClass + '">Rate as of<select class="' + selectClass + '" id="' + qfNumFieldId('rateDate-' + action) + '" data-action="' + action + '">' + opts + '</select></span>';
 }
 
 function qfRenderProcessCard(p, i, laborBreakdown) {
@@ -466,7 +482,8 @@ function qfCurrencyRow(label, value, action, highlighted) {
 function qfRender() {
   qfWireDelegatedEvents();
   var f = QF.form;
-  var customerFieldFocused = !!(document.activeElement && document.activeElement.id === 'qf-customerName');
+  var customerFieldFocused = !!(document.activeElement && document.activeElement.id === 'qf-customerName') && !QF_CUSTOMER_JUST_SELECTED;
+  QF_CUSTOMER_JUST_SELECTED = false;
   var effectiveLabor = withDerivedLossRates(f.labor, f.material);
   var laborBreakdown = laborCostByProcess(effectiveLabor);
   var quoteForCalc = deepClone(f);
@@ -480,14 +497,20 @@ function qfRender() {
   var monthlyMargin = (finalPrice - summary.cogs) * f.monthlyQty;
   var toolingTotal = f.tooling.items.reduce(function (s, it) { return s + (it.totalTHB !== undefined ? it.totalTHB : (it.qty || 0) * (it.unitPriceTHB || 0)); }, 0);
 
+  var canEditQuotes = permAtLeast('quotes', 'edit');
   var html = '';
   html += '<div class="top-row"><div><div class="breadcrumb">Quotes &nbsp;›&nbsp; ' + (QF.mode === 'edit' ? 'Edit' : 'New') + ' ' + escapeHtml(f.id || f.productName || 'quote') + '</div>' +
     '<h1 style="margin:4px 0 0;">' + (QF.mode === 'edit' ? ('Edit Quote — ' + escapeHtml(QF.initialQuote.id)) : 'New Quote') + '</h1></div>' +
     '<div style="display:flex;align-items:center;gap:10px;">' +
     (QF.error ? '<span style="color:#f16667;font-size:12px;">' + escapeHtml(QF.error) + '</span>' : '') +
-    (QF.mode === 'edit' ? '<button class="btn btn-outline" data-click="duplicate">Duplicate this Quote</button>' : '') +
-    '<button class="btn btn-primary" data-click="save" ' + (QF.saving ? 'disabled' : '') + '>' + (QF.saving ? 'Saving…' : 'Save (write to Spreadsheet)') + '</button>' +
+    (canEditQuotes && QF.mode === 'edit' ? '<button class="btn btn-outline" data-click="duplicate">Duplicate this Quote</button>' : '') +
+    (canEditQuotes ? '<button class="btn btn-primary" data-click="save" ' + (QF.saving ? 'disabled' : '') + '>' + (QF.saving ? 'Saving…' : 'Save (write to Spreadsheet)') + '</button>' :
+      '<span class="badge" style="background:#fbfced;color:#8c756a;border:1px solid #dee2ec;">View Only</span>') +
     '</div></div>';
+
+  if (!canEditQuotes) {
+    html += '<div class="banner banner-info">You have view-only access to Quotes — changes here cannot be saved.</div>';
+  }
 
   if (QF.mode === 'copy') {
     html += '<div class="banner banner-info">Copied from <strong>' + escapeHtml(QF.copyFromQuote.id) + '/' + escapeHtml(QF.copyFromQuote.variant) +
@@ -502,20 +525,20 @@ function qfRender() {
   html += qfFieldSelect('Project Type *', 'form.projectType', [['new_model', 'New Model'], ['switch_from_other', 'Switch from Other Supplier'], ['other', 'Other']]);
   if (f.projectType === 'other') html += '<div style="grid-column:1/-1;">' + qfFieldText('Other — Please Describe *', 'form.projectTypeOther', 'Describe the project type') + '</div>';
   html += '<div class="field"><label>Mass Production Start — Year *</label>' + qfNumInputHtml({ path: 'form.massProductionStart.year', decimals: 0, grouping: false }) + '</div>';
-  html += '<div class="field"><label>Granularity</label><select class="input" data-action="granularity">' +
+  html += '<div class="field"><label>Granularity</label><select class="input" id="' + qfNumFieldId('form.massProductionStart.granularity') + '" data-action="granularity">' +
     ['month', 'quarter', 'half'].map(function (g) { return '<option value="' + g + '"' + (f.massProductionStart.granularity === g ? ' selected' : '') + '>' + (g === 'month' ? 'Month' : g === 'quarter' ? 'Quarter' : 'Half Year') + '</option>'; }).join('') + '</select></div>';
   var periodOpts = periodOptions(f.massProductionStart.granularity);
-  html += '<div class="field"><label>Period</label><select class="input" data-action="period"><option value="">Not yet decided</option>' +
+  html += '<div class="field"><label>Period</label><select class="input" id="' + qfNumFieldId('form.massProductionStart.period') + '" data-action="period"><option value="">Not yet decided</option>' +
     periodOpts.map(function (o) { return '<option value="' + o.value + '"' + (f.massProductionStart.period === o.value ? ' selected' : '') + '>' + o.label + '</option>'; }).join('') + '</select></div>';
-  html += '<div class="field"><label>Inquiry Date</label><input type="date" class="input" data-path="form.inquiryDate" value="' + escapeHtml(f.inquiryDate) + '"></div>';
+  html += '<div class="field"><label>Inquiry Date</label><input type="date" class="input" id="' + qfNumFieldId('form.inquiryDate') + '" data-path="form.inquiryDate" value="' + escapeHtml(f.inquiryDate) + '"></div>';
   html += qfFieldSelect('Order Status', 'form.orderStatus', [['in_negotiation', 'In Negotiation'], ['ordered', 'Ordered'], ['lost', 'Lost'], ['on_hold', 'On Hold']]);
   html += '</div></div>';
 
   html += '<div class="section"><div class="section-title">Product Info</div><div class="grid3">';
   html += '<div class="field"><label>F-D CODE</label><div class="fd-code-row"><span class="prefix">F-D</span>' +
-    '<input type="text" class="input" maxlength="4" placeholder="0005" data-action="fdCode" value="' + escapeHtml(f.id.indexOf('F-D') === 0 ? f.id.slice(3) : f.id) + '"></div></div>';
+    '<input type="text" class="input" id="' + qfNumFieldId('form.id') + '" maxlength="4" placeholder="0005" data-action="fdCode" value="' + escapeHtml(f.id.indexOf('F-D') === 0 ? f.id.slice(3) : f.id) + '"></div></div>';
   html += qfFieldText('Product Name *', 'form.productName', 'Product display name');
-  html += '<div class="field"><label>Variant</label><input type="text" class="input" data-path="form.variant" placeholder="current" value="' + escapeHtml(f.variant) + '">' +
+  html += '<div class="field"><label>Variant</label><input type="text" class="input" id="' + qfNumFieldId('form.variant') + '" data-path="form.variant" placeholder="current" value="' + escapeHtml(f.variant) + '">' +
     '<div class="hint">Groups multiple versions of the same quote (e.g. "current", "alt-material") so they can be compared side by side.</div></div>';
   html += '<div class="field"><label>Monthly Qty</label>' + qfNumInputHtml({ path: 'form.monthlyQty', decimals: 0 }) + '</div>';
   html += qfFieldSelect('Status', 'form.status', [['draft', 'draft'], ['pending_approval', 'pending_approval'], ['confirmed', 'confirmed'], ['comparison', 'comparison']]);
@@ -523,7 +546,7 @@ function qfRender() {
 
   html += '<div class="section"><div class="section-title"><span>Material Cost</span>' + qfRateDateSelect(f.materialRef.effectiveFrom, qfMaterialDateOptions(f.materialRef.materialCode), 'materialDate') + '</div>';
   html += '<div class="grid3" style="margin-bottom:14px;">';
-  html += '<div class="field"><label>Material (from master)</label><select class="input" data-action="material"><option value="">Select…</option>' +
+  html += '<div class="field"><label>Material (from master)</label><select class="input" id="' + qfNumFieldId('form.materialRef.materialCode') + '" data-action="material"><option value="">Select…</option>' +
     MASTERS.materials.map(function (m) {
       var name = m.history[0] ? m.history[0].displayName : m.code;
       return '<option value="' + escapeHtml(m.code) + '"' + (m.code === f.materialRef.materialCode ? ' selected' : '') + '>' + escapeHtml(name) + '</option>';
@@ -566,7 +589,7 @@ function qfRender() {
   f.tooling.items.forEach(function (item, i) {
     var subtotal = item.totalTHB !== undefined ? item.totalTHB : (item.qty || 0) * (item.unitPriceTHB || 0);
     html += '<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr auto;gap:8px;margin-bottom:8px;align-items:end;">' +
-      '<input type="text" class="input" data-path="form.tooling.items.' + i + '.name" value="' + escapeHtml(item.name) + '">' +
+      '<input type="text" class="input" id="' + qfNumFieldId('form.tooling.items.' + i + '.name') + '" data-path="form.tooling.items.' + i + '.name" value="' + escapeHtml(item.name) + '">' +
       '<div class="field"><label>Qty</label>' + qfNumInputHtml({ value: item.qty || 0, decimals: 0, action: 'toolingQty', index: i, idKey: 'tool-qty-' + i }) + '</div>' +
       '<div class="field"><label>Unit Price (THB)</label>' + qfNumInputHtml({ value: item.unitPriceTHB || 0, action: 'toolingPrice', index: i, idKey: 'tool-price-' + i }) + '</div>' +
       '<div class="field"><label>Subtotal</label><div class="input" style="background:#f9fafb;color:#6b7280;text-align:right;">' + formatNum(subtotal) + ' THB</div></div>' +
@@ -591,7 +614,7 @@ function qfRender() {
   html += '<div class="ivory-box"><div style="display:flex;justify-content:space-between;font-size:12px;"><span style="color:#6b7280;">Target Total Price (calculated)</span><span style="font-weight:700;">' + formatNum(summary.totalPrice) + ' THB</span></div></div>';
 
   html += '<div class="price-box">';
-  html += '<div class="row-between"><span>Final Price to Customer</span><select class="dark-select" data-path="form.customerCurrency">' +
+  html += '<div class="row-between"><span>Final Price to Customer</span><select class="dark-select" id="' + qfNumFieldId('form.customerCurrency') + '" data-path="form.customerCurrency">' +
     ['THB', 'JPY', 'USD'].map(function (c) { return '<option value="' + c + '"' + (f.customerCurrency === c ? ' selected' : '') + '>Quoted in ' + c + '</option>'; }).join('') + '</select></div>';
   html += qfCurrencyRow('THB', finalPrice, 'currencyThb', f.customerCurrency === 'THB');
   html += qfCurrencyRow('JPY', jpy, 'currencyJpy', f.customerCurrency === 'JPY');

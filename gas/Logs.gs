@@ -9,14 +9,14 @@ function appendLoginLog_(user, result) {
 }
 
 function listActivityLog() {
-  requireAdmin_();
+  requirePermission_('logs', 'view');
   var rows = getRows_(getSheet_(SHEETS.ACTIVITY_LOG)).map(rowToPlain_);
   rows.reverse();
   return rows;
 }
 
 function listLoginLog() {
-  requireAdmin_();
+  requirePermission_('logs', 'view');
   var rows = getRows_(getSheet_(SHEETS.LOGIN_LOG)).map(rowToPlain_);
   rows.reverse();
   return rows;

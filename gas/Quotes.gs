@@ -3,6 +3,7 @@
  *  (mirroring quotes/{id}/{variant}.json). */
 
 function listQuotes() {
+  requirePermission_('quotes', 'view');
   return getRows_(getSheet_(SHEETS.QUOTES)).map(function (r) {
     return {
       id: r.id,
@@ -22,6 +23,7 @@ function listQuotes() {
 }
 
 function getQuote(id, variant) {
+  requirePermission_('quotes', 'view');
   var row = findRow_(SHEETS.QUOTES, function (r) { return r.id === id && r.variant === variant; });
   if (!row) return null;
   return JSON.parse(row.dataJson);
@@ -33,7 +35,7 @@ function getQuote(id, variant) {
  * "rename moves the file" behavior for an id/variant change).
  */
 function saveQuote(quote, renameFrom) {
-  var email = requireUser_();
+  var email = requirePermission_('quotes', 'edit');
 
   if (!quote.productName || !String(quote.productName).trim()) {
     throw new Error('Product Name is required.');
@@ -94,7 +96,7 @@ function saveQuote(quote, renameFrom) {
 /** Duplicates each selected quote as a new draft (unique variant), leaving the originals
  *  untouched. Mirrors the Next.js "Duplicate Selected" bulk action. */
 function duplicateQuotes(idVariantPairs) {
-  var email = requireUser_();
+  var email = requirePermission_('quotes', 'edit');
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   var created = [];
