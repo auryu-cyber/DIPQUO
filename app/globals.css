@@ -1,0 +1,50 @@
+@import "tailwindcss";
+
+:root {
+  --background: #fbfced;
+  --foreground: #454142;
+
+  /* KNT brand palette (docs/architecture.md / brand guideline) */
+  --color-knt-blue: #41b6e6;
+  --color-knt-navy: #002d72;
+  --color-knt-dark: #454142;
+  --color-knt-blue-gray: #b3cbd8;
+  --color-knt-pale-blue: #dee2ec;
+  --color-knt-ivory: #fbfced;
+  --color-knt-brown: #8c756a;
+  --color-knt-red: #f16667;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-knt-blue: var(--color-knt-blue);
+  --color-knt-navy: var(--color-knt-navy);
+  --color-knt-dark: var(--color-knt-dark);
+  --color-knt-blue-gray: var(--color-knt-blue-gray);
+  --color-knt-pale-blue: var(--color-knt-pale-blue);
+  --color-knt-ivory: var(--color-knt-ivory);
+  --color-knt-brown: var(--color-knt-brown);
+  --color-knt-red: var(--color-knt-red);
+
+  --font-heading: var(--font-quicksand), sans-serif;
+  --font-sans: var(--font-noto-sans-jp), var(--font-quicksand), sans-serif;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+/* Numeric fields are keyboard/numpad entry only — no click-up/down spinners. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

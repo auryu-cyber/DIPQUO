@@ -1,0 +1,125 @@
+<script>
+/* ============================== Customer Master Admin view ============================== */
+var CA_DATA = [];
+var CA_ADD_OPEN = false;
+var CA_EDIT_ID = null;
+var CA_ERROR = null;
+var CA_SAVING = false;
+
+function renderCustomersView() {
+  if (!permAtLeast('customers', 'view')) {
+    document.getElementById('main').innerHTML = '<div class="banner banner-error">You do not have access to Customers. Ask a Super Admin to grant it in User Management.</div>';
+    return;
+  }
+  document.getElementById('main').innerHTML = '<div class="empty">Loading…</div>';
+  runServer('listCustomers', [], function (customers) {
+    CA_DATA = customers || [];
+    CUSTOMERS = CA_DATA; // keep the Quotes list's cached customer data (popover) in sync
+    CA_ADD_OPEN = false; CA_EDIT_ID = null; CA_ERROR = null;
+    caRender();
+  });
+}
+
+function caReadForm_(prefix) {
+  return {
+    customerName: document.getElementById(prefix + '-customerName').value.trim(),
+    industry: document.getElementById(prefix + '-industry').value.trim(),
+    businessType: document.getElementById(prefix + '-businessType').value.trim(),
+    product: document.getElementById(prefix + '-product').value.trim()
+  };
+}
+
+function caSubmitAdd() {
+  var v = caReadForm_('ca-add');
+  if (!v.customerName) { CA_ERROR = 'Customer Name is required.'; caRender(); return; }
+  CA_ERROR = null;
+  CA_SAVING = true; caRender();
+  runServer('saveCustomer', [v], function () { CA_SAVING = false; renderCustomersView(); },
+    function (err) { CA_SAVING = false; CA_ERROR = err && err.message ? err.message : String(err); caRender(); });
+}
+
+function caSubmitEdit(id) {
+  var v = caReadForm_('ca-edit');
+  if (!v.customerName) { CA_ERROR = 'Customer Name is required.'; caRender(); return; }
+  v.id = id;
+  CA_ERROR = null;
+  CA_SAVING = true; caRender();
+  runServer('saveCustomer', [v], function () { CA_SAVING = false; renderCustomersView(); },
+    function (err) { CA_SAVING = false; CA_ERROR = err && err.message ? err.message : String(err); caRender(); });
+}
+
+function caSubmitDelete(c) {
+  if (!confirm('Delete customer "' + c.customerName + '"? This cannot be undone.')) return;
+  CA_SAVING = true; caRender();
+  runServer('deleteCustomer', [c.id], function () { CA_SAVING = false; renderCustomersView(); },
+    function (err) { CA_SAVING = false; alert('Error: ' + (err && err.message ? err.message : err)); caRender(); });
+}
+
+function caRender() {
+  var html = '';
+  var canEdit = permAtLeast('customers', 'edit');
+  var badgeText = canEdit ? 'Edit Access' : 'View Only';
+  html += '<div class="top-row"><div style="display:flex;align-items:center;gap:10px;"><h1 style="margin:0;">Customer Master</h1>' +
+    '<span class="badge" style="background:#fbfced;color:#8c756a;border:1px solid #dee2ec;">' + badgeText + '</span></div></div>';
+  html += '<div class="section">';
+  html += '<div class="row-between" style="margin-bottom:10px;"><div class="section-title" style="margin:0;">Customers</div>' +
+    (canEdit ? '<button class="btn-link" data-click="caToggleAdd">' + (CA_ADD_OPEN ? 'Cancel' : '+ Add Customer') + '</button>' : '') + '</div>';
+  if (CA_ERROR) html += '<div class="ma-error">' + escapeHtml(CA_ERROR) + '</div>';
+
+  html += '<div style="overflow-x:auto;"><table><thead><tr><th>Customer Name</th><th>Industry</th><th>Business Type</th><th>Product</th>' + (canEdit ? '<th style="text-align:right;">Actions</th>' : '') + '</tr></thead><tbody>';
+  if (CA_DATA.length === 0 && !CA_ADD_OPEN) {
+    html += '<tr><td colspan="5" class="empty">No customers yet.</td></tr>';
+  }
+  CA_DATA.forEach(function (c) {
+    if (canEdit && CA_EDIT_ID === c.id) {
+      html += '<tr style="background:#fbfced;">' +
+        '<td><input type="text" id="ca-edit-customerName" class="input" value="' + escapeHtml(c.customerName) + '"></td>' +
+        '<td><input type="text" id="ca-edit-industry" class="input" value="' + escapeHtml(c.industry || '') + '"></td>' +
+        '<td><input type="text" id="ca-edit-businessType" class="input" value="' + escapeHtml(c.businessType || '') + '"></td>' +
+        '<td><input type="text" id="ca-edit-product" class="input" value="' + escapeHtml(c.product || '') + '"></td>' +
+        '<td style="text-align:right;white-space:nowrap;">' +
+        '<button class="btn-link" data-click="caSaveEdit" data-id="' + escapeHtml(c.id) + '" ' + (CA_SAVING ? 'disabled' : '') + '>' + (CA_SAVING ? 'Saving…' : 'Save') + '</button> ' +
+        '<button class="btn-link" style="color:#6b7280;" data-click="caCancelEdit">Cancel</button></td></tr>';
+    } else {
+      html += '<tr><td style="font-weight:500;color:#002d72;">' + escapeHtml(c.customerName) + '</td>' +
+        '<td>' + escapeHtml(c.industry || '-') + '</td>' +
+        '<td>' + escapeHtml(c.businessType || '-') + '</td>' +
+        '<td>' + escapeHtml(c.product || '-') + '</td>' +
+        (canEdit ? '<td style="text-align:right;white-space:nowrap;">' +
+          '<button class="btn-link" data-click="caStartEdit" data-id="' + escapeHtml(c.id) + '">Edit</button> ' +
+          '<button class="btn-danger-link" data-click="caDelete" data-id="' + escapeHtml(c.id) + '">Delete</button></td>' : '') + '</tr>';
+    }
+  });
+  html += '</tbody></table></div>';
+
+  if (canEdit && CA_ADD_OPEN) {
+    html += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #f2f2f2;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:end;">' +
+      '<div class="field"><label>Customer Name *</label><input type="text" id="ca-add-customerName" class="input"></div>' +
+      '<div class="field"><label>Industry</label><input type="text" id="ca-add-industry" class="input" placeholder="e.g. Home Appliance, Automotive, Medical"></div>' +
+      '<div class="field"><label>Business Type</label><input type="text" id="ca-add-businessType" class="input" placeholder="e.g. Manufacturer, Trading Company"></div>' +
+      '<div class="field"><label>Product</label><input type="text" id="ca-add-product" class="input" placeholder="e.g. Wire Harness, Copper Pipe"></div>' +
+      '<div style="grid-column:1/-1;"><button class="btn btn-primary" data-click="caSaveAdd" ' + (CA_SAVING ? 'disabled' : '') + '>' + (CA_SAVING ? 'Saving…' : 'Save Customer') + '</button></div>' +
+      '</div>';
+  }
+
+  html += '</div>';
+  document.getElementById('main').innerHTML = html;
+  caWireEvents();
+}
+
+function caWireEvents() {
+  Array.prototype.forEach.call(document.querySelectorAll('[data-click]'), function (el) {
+    el.onclick = function (e) {
+      e.preventDefault();
+      var action = el.getAttribute('data-click');
+      var id = el.getAttribute('data-id');
+      if (action === 'caToggleAdd') { CA_ADD_OPEN = !CA_ADD_OPEN; CA_EDIT_ID = null; CA_ERROR = null; caRender(); }
+      else if (action === 'caSaveAdd') { caSubmitAdd(); }
+      else if (action === 'caStartEdit') { CA_EDIT_ID = id; CA_ADD_OPEN = false; CA_ERROR = null; caRender(); }
+      else if (action === 'caCancelEdit') { CA_EDIT_ID = null; caRender(); }
+      else if (action === 'caSaveEdit') { caSubmitEdit(id); }
+      else if (action === 'caDelete') { var c = CA_DATA.filter(function (x) { return x.id === id; })[0]; if (c) caSubmitDelete(c); }
+    };
+  });
+}
+</script>

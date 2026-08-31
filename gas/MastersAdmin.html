@@ -1,0 +1,278 @@
+<script>
+/* ============================== Master Data Admin view ============================== */
+var MA_DATA = null;
+var MA_OPEN_ADD = {};    // 'type::code' -> true (add-rate-for-existing-code form open)
+var MA_ADD_SOURCE = {};  // 'type::code' -> history entry to prefill the add form from (set by "Duplicate"; null = prefill from current)
+var MA_OPEN_NEW = {};    // type -> true (add-new-code form open; materials/packing-costs only)
+var MA_EDIT_KEY = null;  // 'type::code::effectiveFrom' currently being edited
+var MA_ERROR = {};       // key -> message
+var MA_SAVING = false;
+
+var MA_FIELDS = {
+  'materials': [{ key: 'pricePerKg', label: 'Price (THB/kg)', decimals: 2, step: 0.01 }],
+  'labor-rates': [{ key: 'hourlyChargeTHB', label: 'Hourly Charge (THB/h)', decimals: 2, step: 0.01 }],
+  'packing-costs': [{ key: 'priceTHB', label: 'Price (THB)', decimals: 2, step: 0.01 }, { key: 'qtyPerUnit', label: 'Qty/Unit', decimals: 0, step: 1 }],
+  'transportation': [{ key: 'vehicleTHB', label: 'Vehicle (THB)', decimals: 2, step: 0.01 }, { key: 'fuelTHB', label: 'Fuel (THB)', decimals: 2, step: 0.01 }, { key: 'qtyPerTrip', label: 'Qty/Trip', decimals: 0, step: 1 }],
+  'exchange-rates': [{ key: 'jpyPerThb', label: 'JPY per THB', decimals: 4, step: 0.0001 }, { key: 'usdPerThb', label: 'USD per THB', decimals: 4, step: 0.0001 }]
+};
+var MA_HAS_NAME = { 'materials': true, 'packing-costs': true };
+var MA_TYPE_LABEL = { 'materials': 'Materials', 'labor-rates': 'Labor Rate', 'packing-costs': 'Packing Costs', 'transportation': 'Transportation', 'exchange-rates': 'Exchange Rates (THB base)' };
+var MA_TYPE_ORDER = ['materials', 'labor-rates', 'packing-costs', 'transportation', 'exchange-rates'];
+
+function renderMastersView() {
+  if (!permAtLeast('masters', 'view')) {
+    document.getElementById('main').innerHTML = '<div class="banner banner-error">You do not have access to Master Data. Ask a Super Admin to grant it in User Management.</div>';
+    return;
+  }
+  document.getElementById('main').innerHTML = '<div class="empty">Loading…</div>';
+  runServer('getQuoteFormMasters', [], function (masters) {
+    MA_DATA = masters;
+    MASTERS = masters; // keep the quote form's cached master data in sync with edits made here
+    MA_OPEN_ADD = {}; MA_ADD_SOURCE = {}; MA_OPEN_NEW = {}; MA_EDIT_KEY = null; MA_ERROR = {};
+    maRender();
+  });
+}
+
+function maKey(type, code) { return type + '::' + code; }
+
+function maGroupsForType(type) {
+  if (type === 'materials') return MA_DATA.materials;
+  if (type === 'packing-costs') return MA_DATA.packingItems;
+  var hist = type === 'labor-rates' ? MA_DATA.laborRateHistory : type === 'transportation' ? MA_DATA.transportationHistory : MA_DATA.exchangeRateHistory;
+  return [{ code: 'default', history: hist }];
+}
+
+function maCurrent(history) {
+  var today = todayStr();
+  for (var i = 0; i < history.length; i++) { if (history[i].effectiveFrom <= today) return history[i]; }
+  return history[0];
+}
+
+function maFindHistoryEntry_(type, code, effectiveFrom) {
+  var groups = maGroupsForType(type);
+  var g = groups.filter(function (x) { return x.code === code; })[0];
+  if (!g) return null;
+  return g.history.filter(function (h) { return h.effectiveFrom === effectiveFrom; })[0] || null;
+}
+
+function maFieldInputHtml(id, value, step) {
+  return '<input type="number" inputmode="decimal" step="' + (step || 0.01) + '" id="' + id + '" class="input" value="' + escapeHtml(value === undefined || value === null ? '' : value) + '">';
+}
+
+function maReadForm_(prefix, type, hasName) {
+  var fields = MA_FIELDS[type];
+  var out = { effectiveFrom: document.getElementById(prefix + '-effectiveFrom').value, note: document.getElementById(prefix + '-note').value };
+  if (hasName) out.displayName = document.getElementById(prefix + '-displayName').value;
+  fields.forEach(function (f) { out[f.key] = Number(document.getElementById(prefix + '-' + f.key).value || 0); });
+  return out;
+}
+
+function maReadNewCodeValues_(type) {
+  var fields = MA_FIELDS[type];
+  var out = { effectiveFrom: document.getElementById('ma-new-' + type + '-effectiveFrom').value };
+  fields.forEach(function (f) { out[f.key] = Number(document.getElementById('ma-new-' + type + '-' + f.key).value || 0); });
+  return out;
+}
+
+function maSubmitAdd(type, code) {
+  var key = maKey(type, code);
+  var values = maReadForm_('ma-add-' + key, type, !!MA_HAS_NAME[type]);
+  MA_ERROR[key] = null;
+  MA_SAVING = true; maRender();
+  runServer('addMasterRecord', [type, code, values], function () {
+    MA_SAVING = false;
+    renderMastersView();
+  }, function (err) {
+    MA_SAVING = false; MA_ERROR[key] = err && err.message ? err.message : String(err);
+    maRender();
+  });
+}
+
+function maSubmitEdit(type, code, originalEffectiveFrom) {
+  var key = maKey(type, code);
+  var values = maReadForm_('ma-edit-' + key, type, !!MA_HAS_NAME[type]);
+  MA_ERROR[key] = null;
+  MA_SAVING = true; maRender();
+  runServer('updateMasterRecord', [type, code, originalEffectiveFrom, values], function () {
+    MA_SAVING = false;
+    renderMastersView();
+  }, function (err) {
+    MA_SAVING = false; MA_ERROR[key] = err && err.message ? err.message : String(err);
+    maRender();
+  });
+}
+
+function maSubmitDelete(type, code, effectiveFrom) {
+  if (!confirm('Delete the rate effective ' + effectiveFrom + '? This cannot be undone.')) return;
+  MA_SAVING = true; maRender();
+  runServer('deleteMasterRecord', [type, code, effectiveFrom], function () {
+    MA_SAVING = false;
+    renderMastersView();
+  }, function (err) {
+    MA_SAVING = false;
+    alert('Error: ' + (err && err.message ? err.message : err));
+    maRender();
+  });
+}
+
+function maSubmitNewCode(type) {
+  var errKey = 'new::' + type;
+  var code = document.getElementById('ma-new-' + type + '-code').value.trim();
+  var displayName = document.getElementById('ma-new-' + type + '-displayName').value.trim();
+  if (!code || !displayName) { MA_ERROR[errKey] = 'Code and Display Name are required.'; maRender(); return; }
+  var values = maReadNewCodeValues_(type);
+  values.displayName = displayName;
+  MA_ERROR[errKey] = null;
+  MA_SAVING = true; maRender();
+  runServer('addMasterRecord', [type, code, values], function () {
+    MA_SAVING = false; MA_OPEN_NEW[type] = false;
+    renderMastersView();
+  }, function (err) {
+    MA_SAVING = false; MA_ERROR[errKey] = err && err.message ? err.message : String(err);
+    maRender();
+  });
+}
+
+function maRenderItem_(type, code, displayLabel, history) {
+  var key = maKey(type, code);
+  var hasName = !!MA_HAS_NAME[type];
+  var fields = MA_FIELDS[type];
+  var current = maCurrent(history);
+  var addOpen = !!MA_OPEN_ADD[key];
+  var error = MA_ERROR[key];
+  var canEdit = permAtLeast('masters', 'edit');
+
+  var html = '<div class="ma-item">';
+  html += '<div class="row-between">';
+  html += '<div><div class="ma-item-title">' + escapeHtml(displayLabel) + '</div>' +
+    '<div class="ma-item-sub">' + history.length + ' period rate' + (history.length === 1 ? '' : 's') + ' on file' +
+    (current ? ' · currently ' + escapeHtml(current.effectiveFrom) : '') + '</div></div>';
+  if (canEdit) html += '<button class="btn-link" data-click="maToggleAdd" data-type="' + type + '" data-code="' + escapeHtml(code) + '">' + (addOpen ? 'Cancel' : '+ Add rate for a period') + '</button>';
+  html += '</div>';
+
+  if (error) html += '<div class="ma-error">' + escapeHtml(error) + '</div>';
+
+  if (history.length > 0) {
+    html += '<div style="overflow-x:auto;margin-top:10px;"><table><thead><tr>' +
+      '<th>Effective From</th>' + (hasName ? '<th>Name</th>' : '') +
+      fields.map(function (f) { return '<th style="text-align:right;">' + escapeHtml(f.label) + '</th>'; }).join('') +
+      '<th>Recorded By</th><th>Note</th><th style="text-align:right;">Actions</th></tr></thead><tbody>';
+    history.forEach(function (h) {
+      var isEditing = canEdit && MA_EDIT_KEY === (key + '::' + h.effectiveFrom);
+      if (isEditing) {
+        var p = 'ma-edit-' + key;
+        html += '<tr style="background:#fbfced;">' +
+          '<td><input type="date" id="' + p + '-effectiveFrom" class="input" value="' + escapeHtml(h.effectiveFrom) + '"></td>' +
+          (hasName ? '<td><input type="text" id="' + p + '-displayName" class="input" value="' + escapeHtml(h.displayName || '') + '"></td>' : '') +
+          fields.map(function (f) { return '<td>' + maFieldInputHtml(p + '-' + f.key, h[f.key], f.step) + '</td>'; }).join('') +
+          '<td style="color:#9ca3af;">' + escapeHtml(h.recordedBy || '') + '</td>' +
+          '<td><input type="text" id="' + p + '-note" class="input" value="' + escapeHtml(h.note || '') + '"></td>' +
+          '<td style="text-align:right;white-space:nowrap;">' +
+          '<button class="btn-link" data-click="maSaveEdit" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '" ' + (MA_SAVING ? 'disabled' : '') + '>' + (MA_SAVING ? 'Saving…' : 'Save') + '</button> ' +
+          '<button class="btn-link" style="color:#6b7280;" data-click="maCancelEdit">Cancel</button></td></tr>';
+      } else {
+        html += '<tr' + (h === current ? ' style="background:rgba(65,182,230,0.06);"' : '') + '>' +
+          '<td style="font-weight:500;color:#002d72;">' + escapeHtml(h.effectiveFrom) +
+          (h === current ? ' <span class="badge" style="background:rgba(65,182,230,0.12);color:#0f6fa8;">Current</span>' : '') + '</td>' +
+          (hasName ? '<td>' + escapeHtml(h.displayName || '') + '</td>' : '') +
+          fields.map(function (f) { return '<td style="text-align:right;">' + formatNum(Number(h[f.key]) || 0, f.decimals) + '</td>'; }).join('') +
+          '<td style="color:#9ca3af;">' + escapeHtml(h.recordedBy || '') + '</td>' +
+          '<td style="color:#9ca3af;">' + escapeHtml(h.note || '') + '</td>' +
+          '<td style="text-align:right;white-space:nowrap;">' +
+          (canEdit ?
+            '<button class="btn-link" data-click="maDuplicate" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '">Duplicate</button> ' +
+            '<button class="btn-link" data-click="maStartEdit" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '">Edit</button> ' +
+            '<button class="btn-danger-link" data-click="maDelete" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '">Delete</button>' : '') +
+          '</td></tr>';
+      }
+    });
+    html += '</tbody></table></div>';
+  }
+
+  if (addOpen) {
+    var ap = 'ma-add-' + key;
+    var addSource = MA_ADD_SOURCE[key] || current;
+    html += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #f2f2f2;">';
+    if (MA_ADD_SOURCE[key]) html += '<div style="font-size:11px;color:#9ca3af;margin-bottom:8px;">Duplicated from ' + escapeHtml(MA_ADD_SOURCE[key].effectiveFrom) + ' — adjust the values and pick a new Effective From date.</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:end;">';
+    if (hasName) html += '<div class="field" style="grid-column:span 2;"><label>Display Name</label><input type="text" id="' + ap + '-displayName" class="input" value="' + escapeHtml(addSource && addSource.displayName ? addSource.displayName : '') + '"></div>';
+    fields.forEach(function (f) {
+      html += '<div class="field"><label>' + escapeHtml(f.label) + '</label>' + maFieldInputHtml(ap + '-' + f.key, addSource ? addSource[f.key] : '', f.step) + '</div>';
+    });
+    html += '<div class="field"><label>Effective From</label><input type="date" id="' + ap + '-effectiveFrom" class="input" value="' + todayStr() + '"></div>';
+    html += '<div class="field" style="grid-column:1/-1;"><label>Note</label><input type="text" id="' + ap + '-note" class="input" value="' + escapeHtml(MA_ADD_SOURCE[key] ? (addSource.note || '') : '') + '"></div>';
+    html += '<div style="grid-column:1/-1;"><button class="btn btn-primary" data-click="maSaveAdd" data-type="' + type + '" data-code="' + escapeHtml(code) + '" ' + (MA_SAVING ? 'disabled' : '') + '>' + (MA_SAVING ? 'Saving…' : 'Save rate') + '</button></div>';
+    html += '</div></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function maRenderNewCode_(type) {
+  var open = !!MA_OPEN_NEW[type];
+  var error = MA_ERROR['new::' + type];
+  var fields = MA_FIELDS[type];
+  if (!open) {
+    return '<button class="btn-link" data-click="maToggleNew" data-type="' + type + '">+ Add new item</button>';
+  }
+  var p = 'ma-new-' + type;
+  var html = '<div style="border:1.5px dashed #dee2ec;border-radius:10px;padding:14px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:end;">';
+  html += '<div class="field"><label>Code</label><input type="text" id="' + p + '-code" class="input" placeholder="e.g. pecoat-500"></div>';
+  html += '<div class="field" style="grid-column:span 2;"><label>Display Name</label><input type="text" id="' + p + '-displayName" class="input"></div>';
+  html += '<div class="field"><label>Effective From</label><input type="date" id="' + p + '-effectiveFrom" class="input" value="' + todayStr() + '"></div>';
+  fields.forEach(function (f) {
+    html += '<div class="field"><label>' + escapeHtml(f.label) + '</label>' + maFieldInputHtml(p + '-' + f.key, '', f.step) + '</div>';
+  });
+  html += '<div style="grid-column:1/-1;display:flex;align-items:center;gap:10px;">' +
+    '<button class="btn btn-primary" data-click="maSaveNew" data-type="' + type + '" ' + (MA_SAVING ? 'disabled' : '') + '>' + (MA_SAVING ? 'Saving…' : 'Create') + '</button>' +
+    '<button class="btn-link" style="color:#6b7280;" data-click="maToggleNew" data-type="' + type + '">Cancel</button>' +
+    (error ? '<span style="color:#f16667;font-size:12px;">' + escapeHtml(error) + '</span>' : '') +
+    '</div>';
+  html += '</div>';
+  return html;
+}
+
+function maRender() {
+  var html = '';
+  var badgeText = permAtLeast('masters', 'edit') ? 'Edit Access' : 'View Only';
+  html += '<div class="top-row"><div style="display:flex;align-items:center;gap:10px;"><h1 style="margin:0;">Master Data</h1>' +
+    '<span class="badge" style="background:#fbfced;color:#8c756a;border:1px solid #dee2ec;">' + badgeText + '</span></div></div>';
+
+  MA_TYPE_ORDER.forEach(function (type) {
+    var groups = maGroupsForType(type);
+    html += '<div class="section"><div class="section-title">' + MA_TYPE_LABEL[type] + '</div>';
+    groups.forEach(function (g) {
+      var displayLabel = MA_HAS_NAME[type] ? (g.history[0] ? g.history[0].displayName : g.code) :
+        (type === 'labor-rates' ? 'Hourly charge' : type === 'transportation' ? 'Vehicle / Fuel / Qty per trip' : 'JPY / USD per THB');
+      html += maRenderItem_(type, g.code, displayLabel, g.history);
+    });
+    if ((type === 'materials' || type === 'packing-costs') && permAtLeast('masters', 'edit')) html += maRenderNewCode_(type);
+    html += '</div>';
+  });
+
+  document.getElementById('main').innerHTML = html;
+  maWireEvents();
+}
+
+function maWireEvents() {
+  Array.prototype.forEach.call(document.querySelectorAll('[data-click]'), function (el) {
+    el.onclick = function (e) {
+      e.preventDefault();
+      var action = el.getAttribute('data-click');
+      var type = el.getAttribute('data-type');
+      var code = el.getAttribute('data-code');
+      var from = el.getAttribute('data-from');
+      if (action === 'maToggleAdd') { var k = maKey(type, code); MA_OPEN_ADD[k] = !MA_OPEN_ADD[k]; MA_ADD_SOURCE[k] = null; MA_EDIT_KEY = null; maRender(); }
+      else if (action === 'maDuplicate') { var k3 = maKey(type, code); MA_ADD_SOURCE[k3] = maFindHistoryEntry_(type, code, from); MA_OPEN_ADD[k3] = true; MA_EDIT_KEY = null; maRender(); }
+      else if (action === 'maToggleNew') { MA_OPEN_NEW[type] = !MA_OPEN_NEW[type]; maRender(); }
+      else if (action === 'maSaveAdd') { maSubmitAdd(type, code); }
+      else if (action === 'maSaveNew') { maSubmitNewCode(type); }
+      else if (action === 'maStartEdit') { MA_EDIT_KEY = maKey(type, code) + '::' + from; MA_OPEN_ADD[maKey(type, code)] = false; maRender(); }
+      else if (action === 'maCancelEdit') { MA_EDIT_KEY = null; maRender(); }
+      else if (action === 'maSaveEdit') { maSubmitEdit(type, code, from); }
+      else if (action === 'maDelete') { maSubmitDelete(type, code, from); }
+    };
+  });
+}
+</script>
