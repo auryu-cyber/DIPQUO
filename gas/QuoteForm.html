@@ -619,6 +619,7 @@ function qfRender() {
   html += qfCurrencyRow('THB', finalPrice, 'currencyThb', f.customerCurrency === 'THB');
   html += qfCurrencyRow('JPY', jpy, 'currencyJpy', f.customerCurrency === 'JPY');
   html += qfCurrencyRow('USD', usd, 'currencyUsd', f.customerCurrency === 'USD');
+  html += '<div class="row-between" style="margin-top:8px;"><span>Tooling Cost</span><span style="color:#fff;font-weight:600;">' + formatNum(toolingTotal * f.tooling.customerMarkup, 2) + ' THB</span></div>';
   html += '<div class="row-between" style="margin-top:8px;"><span>Exchange Rate as of</span>' + qfRateDateSelect(f.exchangeRateRef.effectiveFrom, qfExchangeDateOptions(), 'exchangeDate', true) + '</div>';
   html += '<div style="text-align:right;font-size:10px;color:#b3cbd8;">1 THB = ' + formatNum(f.exchangeRate.jpyPerThb, 4) + ' JPY / ' + formatNum(f.exchangeRate.usdPerThb, 4) + ' USD</div>';
   html += '<div style="text-align:center;font-size:11px;color:rgba(255,255,255,0.9);font-weight:500;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,255,255,0.15);">Material ' + formatPct(summary.materialPct) + ' · Gross Margin ' + formatPct(summary.grossMarginPct) + '</div>';
