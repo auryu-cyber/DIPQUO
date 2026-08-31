@@ -83,7 +83,7 @@ Claude（この開発アシスタント）は Apps Script のデプロイ操作�
 
 ## Version表示について
 
-サイドバーのロゴ下に「Version 1.2.0 · 2026-08-31」のように表示されます。これは `gas/Code.gs` の `APP_VERSION` / `APP_VERSION_DATE` 定数から出ています。今後 Claude がコードを更新するたびにこの値を更新するので、**画面のVersion表示が最新のものになっているか**で、正しく再デプロイできたかどうかを一目で確認できます（表示が古いままなら、上記の再デプロイ手順がまだ行われていないということです）。
+サイドバーのロゴ下に「Version 1.3.0 · 2026-08-31」のように表示されます。これは `gas/Code.gs` の `APP_VERSION` / `APP_VERSION_DATE` 定数から出ています。今後 Claude がコードを更新するたびにこの値を更新するので、**画面のVersion表示が最新のものになっているか**で、正しく再デプロイできたかどうかを一目で確認できます（表示が古いままなら、上記の再デプロイ手順がまだ行われていないということです）。
 
 ## 5. 動作確認
 
@@ -103,11 +103,13 @@ Claude（この開発アシスタント）は Apps Script のデプロイ操作�
 - Tooling Cost（項目追加・削除、小計表示、Customer Markup 編集）
 - Final Price to Customer の上書き入力、THB/JPY/USD 相互編集・同サイズ表示、「Quoted in」通貨選択
 - F-D CODE（任意入力）／Product Name（必須）
+- Customer Name は Customer Master からの検索付きプルダウン選択（部分一致で絞り込み）。未登録の名前を入力した場合は「新規顧客として追加」でその場で Customer Master に登録可能（管理者でなくても名前だけの新規登録は可能。業種等の詳細追加は管理者のみ）
 - Undo/Redo（Ctrl+Z / Ctrl+Y）
 
 **Master Data（管理者のみ）**
 - Materials / Labor Rate / Packing Costs / Transportation / Exchange Rates の期間別レート一覧表示・追加・編集・削除
 - Materials / Packing Costs は新しいコード（品目）自体の追加にも対応
+- 既存の期間レートを「Duplicate」で複製し、値を調整してから新しい期間として登録可能
 
 **Customer Master（管理者のみ）**
 - 顧客の一覧表示・追加・編集・削除

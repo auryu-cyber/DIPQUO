@@ -1,10 +1,11 @@
 <script>
 /* ============================== Master Data Admin view ============================== */
 var MA_DATA = null;
-var MA_OPEN_ADD = {};   // 'type::code' -> true (add-rate-for-existing-code form open)
-var MA_OPEN_NEW = {};   // type -> true (add-new-code form open; materials/packing-costs only)
-var MA_EDIT_KEY = null; // 'type::code::effectiveFrom' currently being edited
-var MA_ERROR = {};      // key -> message
+var MA_OPEN_ADD = {};    // 'type::code' -> true (add-rate-for-existing-code form open)
+var MA_ADD_SOURCE = {};  // 'type::code' -> history entry to prefill the add form from (set by "Duplicate"; null = prefill from current)
+var MA_OPEN_NEW = {};    // type -> true (add-new-code form open; materials/packing-costs only)
+var MA_EDIT_KEY = null;  // 'type::code::effectiveFrom' currently being edited
+var MA_ERROR = {};       // key -> message
 var MA_SAVING = false;
 
 var MA_FIELDS = {
@@ -23,7 +24,7 @@ function renderMastersView() {
   runServer('getQuoteFormMasters', [], function (masters) {
     MA_DATA = masters;
     MASTERS = masters; // keep the quote form's cached master data in sync with edits made here
-    MA_OPEN_ADD = {}; MA_OPEN_NEW = {}; MA_EDIT_KEY = null; MA_ERROR = {};
+    MA_OPEN_ADD = {}; MA_ADD_SOURCE = {}; MA_OPEN_NEW = {}; MA_EDIT_KEY = null; MA_ERROR = {};
     maRender();
   });
 }
@@ -41,6 +42,13 @@ function maCurrent(history) {
   var today = todayStr();
   for (var i = 0; i < history.length; i++) { if (history[i].effectiveFrom <= today) return history[i]; }
   return history[0];
+}
+
+function maFindHistoryEntry_(type, code, effectiveFrom) {
+  var groups = maGroupsForType(type);
+  var g = groups.filter(function (x) { return x.code === code; })[0];
+  if (!g) return null;
+  return g.history.filter(function (h) { return h.effectiveFrom === effectiveFrom; })[0] || null;
 }
 
 function maFieldInputHtml(id, value, step) {
@@ -166,6 +174,7 @@ function maRenderItem_(type, code, displayLabel, history) {
           '<td style="color:#9ca3af;">' + escapeHtml(h.recordedBy || '') + '</td>' +
           '<td style="color:#9ca3af;">' + escapeHtml(h.note || '') + '</td>' +
           '<td style="text-align:right;white-space:nowrap;">' +
+          '<button class="btn-link" data-click="maDuplicate" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '">Duplicate</button> ' +
           '<button class="btn-link" data-click="maStartEdit" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '">Edit</button> ' +
           '<button class="btn-danger-link" data-click="maDelete" data-type="' + type + '" data-code="' + escapeHtml(code) + '" data-from="' + escapeHtml(h.effectiveFrom) + '">Delete</button></td></tr>';
       }
@@ -175,15 +184,18 @@ function maRenderItem_(type, code, displayLabel, history) {
 
   if (addOpen) {
     var ap = 'ma-add-' + key;
-    html += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #f2f2f2;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:end;">';
-    if (hasName) html += '<div class="field" style="grid-column:span 2;"><label>Display Name</label><input type="text" id="' + ap + '-displayName" class="input" value="' + escapeHtml(current && current.displayName ? current.displayName : '') + '"></div>';
+    var addSource = MA_ADD_SOURCE[key] || current;
+    html += '<div style="margin-top:10px;padding-top:10px;border-top:1px solid #f2f2f2;">';
+    if (MA_ADD_SOURCE[key]) html += '<div style="font-size:11px;color:#9ca3af;margin-bottom:8px;">Duplicated from ' + escapeHtml(MA_ADD_SOURCE[key].effectiveFrom) + ' — adjust the values and pick a new Effective From date.</div>';
+    html += '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;align-items:end;">';
+    if (hasName) html += '<div class="field" style="grid-column:span 2;"><label>Display Name</label><input type="text" id="' + ap + '-displayName" class="input" value="' + escapeHtml(addSource && addSource.displayName ? addSource.displayName : '') + '"></div>';
     fields.forEach(function (f) {
-      html += '<div class="field"><label>' + escapeHtml(f.label) + '</label>' + maFieldInputHtml(ap + '-' + f.key, current ? current[f.key] : '', f.step) + '</div>';
+      html += '<div class="field"><label>' + escapeHtml(f.label) + '</label>' + maFieldInputHtml(ap + '-' + f.key, addSource ? addSource[f.key] : '', f.step) + '</div>';
     });
     html += '<div class="field"><label>Effective From</label><input type="date" id="' + ap + '-effectiveFrom" class="input" value="' + todayStr() + '"></div>';
-    html += '<div class="field" style="grid-column:1/-1;"><label>Note</label><input type="text" id="' + ap + '-note" class="input"></div>';
+    html += '<div class="field" style="grid-column:1/-1;"><label>Note</label><input type="text" id="' + ap + '-note" class="input" value="' + escapeHtml(MA_ADD_SOURCE[key] ? (addSource.note || '') : '') + '"></div>';
     html += '<div style="grid-column:1/-1;"><button class="btn btn-primary" data-click="maSaveAdd" data-type="' + type + '" data-code="' + escapeHtml(code) + '" ' + (MA_SAVING ? 'disabled' : '') + '>' + (MA_SAVING ? 'Saving…' : 'Save rate') + '</button></div>';
-    html += '</div>';
+    html += '</div></div>';
   }
 
   html += '</div>';
@@ -243,7 +255,8 @@ function maWireEvents() {
       var type = el.getAttribute('data-type');
       var code = el.getAttribute('data-code');
       var from = el.getAttribute('data-from');
-      if (action === 'maToggleAdd') { var k = maKey(type, code); MA_OPEN_ADD[k] = !MA_OPEN_ADD[k]; MA_EDIT_KEY = null; maRender(); }
+      if (action === 'maToggleAdd') { var k = maKey(type, code); MA_OPEN_ADD[k] = !MA_OPEN_ADD[k]; MA_ADD_SOURCE[k] = null; MA_EDIT_KEY = null; maRender(); }
+      else if (action === 'maDuplicate') { var k3 = maKey(type, code); MA_ADD_SOURCE[k3] = maFindHistoryEntry_(type, code, from); MA_OPEN_ADD[k3] = true; MA_EDIT_KEY = null; maRender(); }
       else if (action === 'maToggleNew') { MA_OPEN_NEW[type] = !MA_OPEN_NEW[type]; maRender(); }
       else if (action === 'maSaveAdd') { maSubmitAdd(type, code); }
       else if (action === 'maSaveNew') { maSubmitNewCode(type); }

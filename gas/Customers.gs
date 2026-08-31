@@ -8,15 +8,31 @@ function listCustomers() {
   return rows;
 }
 
+/**
+ * Any signed-in user may register a brand-new customer with just a name (needed so a
+ * salesperson can add a new customer inline while creating a quote, without admin rights).
+ * Editing an existing customer, or setting industry/businessType/product on creation,
+ * still requires admin — that richer editing only happens from the Customers admin page.
+ */
 function saveCustomer(input) {
-  var email = requireAdmin_();
+  var email = requireUser_();
   var name = String(input.customerName || '').trim();
   if (!name) throw new Error('Customer Name is required.');
+  var admin = isAdminEmail_(email);
 
   var lock = LockService.getScriptLock();
   lock.waitLock(30000);
   try {
     var id = input.id || slugify_(name);
+    var existing = findRow_(SHEETS.CUSTOMERS, function (r) { return r.id === id; });
+
+    if (!admin) {
+      if (existing) throw new Error('Admin access required to edit an existing customer.');
+      if (input.industry || input.businessType || input.product) {
+        throw new Error('Admin access required to set customer details. You can add the customer name; an admin can fill in the rest later.');
+      }
+    }
+
     var row = {
       id: id,
       customerName: name,
@@ -26,10 +42,9 @@ function saveCustomer(input) {
       updatedAt: new Date().toISOString(),
       updatedBy: email
     };
-    var existing = findRow_(SHEETS.CUSTOMERS, function (r) { return r.id === id; });
     if (existing) updateRow_(SHEETS.CUSTOMERS, existing._rowIndex, row);
     else appendRow_(SHEETS.CUSTOMERS, row);
-    appendActivityLog_(email, 'edited', 'customer:' + id, 'Saved customer "' + name + '"');
+    appendActivityLog_(email, existing ? 'edited' : 'created', 'customer:' + id, (existing ? 'Saved' : 'Created') + ' customer "' + name + '"');
   } finally {
     lock.releaseLock();
   }

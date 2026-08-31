@@ -7,6 +7,7 @@ var QF = { form: null, finalPriceOverride: null, mode: null, initialQuote: null,
 var QF_UI = { editingField: null, editingText: '' };
 var QF_HISTORY = { past: [], future: [] };
 var QF_EVENTS_WIRED = false;
+var QF_SUPPRESS_FOCUSIN = false; // true only while qfRenderPreserveFocus is programmatically refocusing, to avoid focusin handlers re-triggering themselves
 
 document.addEventListener('keydown', function (e) {
   if (VIEW.name !== 'quote-form') return;
@@ -175,7 +176,9 @@ function qfRenderPreserveFocus() {
   if (id) {
     var el = document.getElementById(id);
     if (el) {
+      QF_SUPPRESS_FOCUSIN = true;
       el.focus();
+      QF_SUPPRESS_FOCUSIN = false;
       if (selStart !== null && el.setSelectionRange) { try { el.setSelectionRange(selStart, selEnd); } catch (e) {} }
     }
   }
@@ -256,18 +259,25 @@ function qfWireDelegatedEvents() {
   var main = document.getElementById('main');
 
   main.addEventListener('focusin', function (e) {
+    if (QF_SUPPRESS_FOCUSIN) return;
     var t = e.target;
-    if (VIEW.name === 'quote-form' && t.dataset && t.dataset.numField) {
+    if (VIEW.name !== 'quote-form') return;
+    if (t.dataset && t.dataset.numField) {
       var val = Number(t.dataset.path ? getByPath(QF, t.dataset.path) : 0);
       if (t.dataset.percent === '1') val = val * 100;
       QF_UI.editingField = t.id;
       QF_UI.editingText = val === 0 ? '' : String(val);
+    } else if (t.id === 'qf-customerName') {
+      qfRenderPreserveFocus();
     }
   });
   main.addEventListener('focusout', function (e) {
     var t = e.target;
-    if (VIEW.name === 'quote-form' && t.dataset && t.dataset.numField) {
+    if (VIEW.name !== 'quote-form') return;
+    if (t.dataset && t.dataset.numField) {
       QF_UI.editingField = null;
+      qfRender();
+    } else if (t.id === 'qf-customerName') {
       qfRender();
     }
   });
@@ -308,6 +318,24 @@ function qfWireDelegatedEvents() {
     else if (click === 'removeTooling') { QF.form.tooling.items.splice(Number(t.getAttribute('data-index')), 1); qfCommit(); }
     else if (click === 'save') { qfSave(); }
     else if (click === 'duplicate') { navigate('quote-form', { copyFrom: QF.initialQuote.id + '/' + QF.initialQuote.variant }); }
+    else if (click === 'selectCustomer') {
+      QF.form.customerName = t.getAttribute('data-value');
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      qfCommit();
+    }
+    else if (click === 'addNewCustomer') {
+      var newCustomerName = t.getAttribute('data-value');
+      QF.form.customerName = newCustomerName;
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      runServer('saveCustomer', [{ customerName: newCustomerName }], function () {
+        if (!CUSTOMERS.some(function (c) { return String(c.customerName).toLowerCase() === newCustomerName.toLowerCase(); })) {
+          CUSTOMERS.push({ customerName: newCustomerName, industry: '', businessType: '', product: '' });
+        }
+      }, function (err) {
+        alert('Could not save the new customer to Customer Master: ' + (err && err.message ? err.message : err));
+      });
+      qfCommit();
+    }
   });
 }
 
@@ -364,6 +392,31 @@ function qfFieldSelect(label, path, options) {
 function qfFieldNum(label, path, decimals) {
   return '<div class="field"><label>' + escapeHtml(label) + '</label>' + qfNumInputHtml({ path: path, decimals: decimals }) + '</div>';
 }
+function qfCustomerFieldHtml(value, open) {
+  var val = value || '';
+  var query = val.trim().toLowerCase();
+  var matches = query ? CUSTOMERS.filter(function (c) { return String(c.customerName).toLowerCase().indexOf(query) !== -1; }) : CUSTOMERS.slice();
+  var exactMatch = CUSTOMERS.some(function (c) { return String(c.customerName).toLowerCase() === query; });
+  var html = '<div class="field ac-field"><label>Customer Name *</label>' +
+    '<input type="text" class="input" id="qf-customerName" autocomplete="off" data-path="form.customerName" placeholder="Customer company name" value="' + escapeHtml(val) + '">';
+  if (open) {
+    html += '<div class="ac-dropdown">';
+    if (matches.length > 0) {
+      matches.slice(0, 30).forEach(function (c) {
+        html += '<div class="ac-option" data-click="selectCustomer" data-value="' + escapeHtml(c.customerName) + '">' + escapeHtml(c.customerName) + '</div>';
+      });
+    } else if (!query) {
+      html += '<div class="ac-option-empty">No customers registered yet — type a name to add one</div>';
+    }
+    if (query && !exactMatch) {
+      html += '<div class="ac-option ac-option-new" data-click="addNewCustomer" data-value="' + escapeHtml(val.trim()) + '">+ Add "' + escapeHtml(val.trim()) + '" as a new customer</div>';
+    }
+    html += '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
 function qfRateDateSelect(currentValue, options, action, dark) {
   var hasValue = options.indexOf(currentValue) !== -1;
   var opts = '';
@@ -413,6 +466,7 @@ function qfCurrencyRow(label, value, action, highlighted) {
 function qfRender() {
   qfWireDelegatedEvents();
   var f = QF.form;
+  var customerFieldFocused = !!(document.activeElement && document.activeElement.id === 'qf-customerName');
   var effectiveLabor = withDerivedLossRates(f.labor, f.material);
   var laborBreakdown = laborCostByProcess(effectiveLabor);
   var quoteForCalc = deepClone(f);
@@ -443,7 +497,7 @@ function qfRender() {
   html += '<div class="flex-gap"><div class="flex-1">';
 
   html += '<div class="section"><div class="section-title">Project Info</div><div class="grid3">';
-  html += qfFieldText('Customer Name *', 'form.customerName', 'Customer company name');
+  html += qfCustomerFieldHtml(f.customerName, customerFieldFocused);
   html += qfFieldText('Project Name *', 'form.projectName', 'Project name');
   html += qfFieldSelect('Project Type *', 'form.projectType', [['new_model', 'New Model'], ['switch_from_other', 'Switch from Other Supplier'], ['other', 'Other']]);
   if (f.projectType === 'other') html += '<div style="grid-column:1/-1;">' + qfFieldText('Other — Please Describe *', 'form.projectTypeOther', 'Describe the project type') + '</div>';
