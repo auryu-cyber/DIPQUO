@@ -9,6 +9,7 @@
   #sidebar .brand { display: flex; align-items: center; gap: 10px; padding: 8px; margin-bottom: 20px; }
   #sidebar .brand-badge { border: 2px solid #fff; border-radius: 10px; width: 40px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 13px; }
   #sidebar .brand-title { font-weight: 700; font-size: 13px; }
+  #sidebar .version-tag { font-size: 10px; color: #b3cbd8; padding: 0 8px 12px; margin-top: -14px; }
   #sidebar nav { display: flex; flex-direction: column; gap: 4px; }
   #sidebar nav a { padding: 10px 12px; border-radius: 10px; font-size: 13px; color: #dee2ec; }
   #sidebar nav a.active { background: rgba(255,255,255,0.18); color: #fff; font-weight: 500; }
@@ -83,6 +84,7 @@
       <div class="brand-badge">KNT</div>
       <div class="brand-title">DIP Quotation<br/>System</div>
     </div>
+    <div class="version-tag">Version <?= appVersion ?> · <?= appVersionDate ?></div>
     <nav id="nav"></nav>
     <div class="user-box" id="userBox">Loading…</div>
   </div>
