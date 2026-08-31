@@ -4,7 +4,7 @@
 
 function listQuotes() {
   requirePermission_('quotes', 'view');
-  return getRows_(getSheet_(SHEETS.QUOTES)).map(function (r) {
+  return getRows_(getSheet_(SHEETS.QUOTES)).filter(function (r) { return !r.deletedAt; }).map(function (r) {
     return {
       id: r.id,
       variant: r.variant,
@@ -25,8 +25,36 @@ function listQuotes() {
 function getQuote(id, variant) {
   requirePermission_('quotes', 'view');
   var row = findRow_(SHEETS.QUOTES, function (r) { return r.id === id && r.variant === variant; });
-  if (!row) return null;
+  if (!row || row.deletedAt) return null;
   return JSON.parse(row.dataJson);
+}
+
+/** Soft-delete: marks the row as deleted (hidden from listQuotes/getQuote) instead of
+ *  removing it, so the data stays in the spreadsheet for recovery/audit. */
+function softDeleteQuotes(idVariantPairs) {
+  var email = requirePermission_('quotes', 'edit');
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  var deleted = [];
+  try {
+    idVariantPairs.forEach(function (pair) {
+      var parts = String(pair).split('/');
+      var id = parts[0], variant = parts[1];
+      if (!id || !variant) return;
+      var row = findRow_(SHEETS.QUOTES, function (r) { return r.id === id && r.variant === variant; });
+      if (!row || row.deletedAt) return;
+      var updated = shallowCopy_(row);
+      updated.deletedAt = new Date().toISOString();
+      updateRow_(SHEETS.QUOTES, row._rowIndex, updated);
+      deleted.push(id + '/' + variant);
+    });
+    if (deleted.length > 0) {
+      appendActivityLog_(email, 'edited', deleted.join(', '), 'Deleted (hidden) ' + deleted.length + ' quote(s) — data preserved in the spreadsheet');
+    }
+  } finally {
+    lock.releaseLock();
+  }
+  return deleted;
 }
 
 /**

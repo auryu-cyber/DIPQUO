@@ -98,3 +98,32 @@ function setUserAdmin(email, isAdmin) {
     lock.releaseLock();
   }
 }
+
+/**
+ * Removes a user's explicit access: deletes their Permissions row and, if present, their
+ * Admins row, reverting them to default access (quotes=edit, everything else=none). Note
+ * this cannot erase someone from the User Management list entirely if they have a LoginLog
+ * history — listUserPermissions() always includes anyone who has ever signed in, showing
+ * them back with all-default settings. That is intentional: login history is an audit trail
+ * and is never purged.
+ */
+function deleteUserPermissions(email) {
+  var actor = requireAdmin_();
+  email = String(email || '').trim().toLowerCase();
+  if (!email) throw new Error('Email is required.');
+  if (email === String(actor).toLowerCase()) {
+    throw new Error('You cannot remove your own access.');
+  }
+
+  var lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    var permRow = findRow_(SHEETS.PERMISSIONS, function (r) { return String(r.email).toLowerCase() === email; });
+    if (permRow) deleteRow_(SHEETS.PERMISSIONS, permRow._rowIndex);
+    var adminRow = findRow_(SHEETS.ADMINS, function (r) { return String(r.email).toLowerCase() === email; });
+    if (adminRow) deleteRow_(SHEETS.ADMINS, adminRow._rowIndex);
+    appendActivityLog_(actor, 'edited', 'permission:' + email, 'Removed user — reverted to default access');
+  } finally {
+    lock.releaseLock();
+  }
+}

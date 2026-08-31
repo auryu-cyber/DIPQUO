@@ -20,7 +20,7 @@ var PERMISSION_PAGES = ['quotes', 'masters', 'customers', 'logs'];
 
 var HEADERS = {};
 HEADERS[SHEETS.QUOTES] = ['id', 'variant', 'productName', 'customerName', 'inquiryDate', 'material',
-  'monthlyQty', 'finalPriceToCustomer', 'grossMarginPct', 'status', 'updatedAt', 'updatedBy', 'dataJson'];
+  'monthlyQty', 'finalPriceToCustomer', 'grossMarginPct', 'status', 'updatedAt', 'updatedBy', 'dataJson', 'deletedAt'];
 HEADERS[SHEETS.MATERIALS] = ['code', 'effectiveFrom', 'displayName', 'pricePerKg', 'recordedAt', 'recordedBy', 'note'];
 HEADERS[SHEETS.LABOR_RATES] = ['code', 'effectiveFrom', 'hourlyChargeTHB', 'recordedAt', 'recordedBy', 'note'];
 HEADERS[SHEETS.PACKING_COSTS] = ['code', 'effectiveFrom', 'displayName', 'priceTHB', 'qtyPerUnit', 'recordedAt', 'recordedBy', 'note'];

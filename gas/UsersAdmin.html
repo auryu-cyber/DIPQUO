@@ -57,6 +57,15 @@ function umToggleAdmin(email, isAdmin) {
   });
 }
 
+function umDeleteUser(email) {
+  runServer('deleteUserPermissions', [email], function () {
+    renderUsersView();
+  }, function (err) {
+    alert('Error: ' + (err && err.message ? err.message : err));
+    renderUsersView();
+  });
+}
+
 function umRender() {
   var html = '';
   html += '<div class="top-row"><div style="display:flex;align-items:center;gap:10px;"><h1 style="margin:0;">User Management</h1>' +
@@ -76,11 +85,13 @@ function umRender() {
     html += '<div class="empty">No users yet.</div>';
   } else {
     html += '<div style="overflow-x:auto;"><table><thead><tr><th>Email</th><th style="text-align:center;">Super Admin</th>' +
-      UM_PAGES.map(function (p) { return '<th style="text-align:center;">' + escapeHtml(p[1]) + '</th>'; }).join('') + '</tr></thead><tbody>';
+      UM_PAGES.map(function (p) { return '<th style="text-align:center;">' + escapeHtml(p[1]) + '</th>'; }).join('') + '<th></th></tr></thead><tbody>';
+    var selfEmail = String(USER.email || '').toLowerCase();
     UM_DATA.forEach(function (u) {
+      var isSelf = u.email === selfEmail;
       html += '<tr>';
-      html += '<td style="font-weight:500;color:#002d72;">' + escapeHtml(u.email) + '</td>';
-      html += '<td style="text-align:center;"><input type="checkbox" data-role="admin-toggle" data-email="' + escapeHtml(u.email) + '" ' + (u.isAdmin ? 'checked' : '') + '></td>';
+      html += '<td style="font-weight:500;color:#002d72;">' + escapeHtml(u.email) + (isSelf ? ' <span style="color:#9ca3af;font-weight:400;">(you)</span>' : '') + '</td>';
+      html += '<td style="text-align:center;"><input type="checkbox" data-role="admin-toggle" data-email="' + escapeHtml(u.email) + '" ' + (u.isAdmin ? 'checked' : '') + (isSelf ? ' disabled' : '') + '></td>';
       UM_PAGES.forEach(function (p) {
         if (u.isAdmin) {
           html += '<td style="text-align:center;color:#9ca3af;font-size:11px;">Edit (Super Admin)</td>';
@@ -91,6 +102,9 @@ function umRender() {
             '</select></td>';
         }
       });
+      html += '<td style="text-align:right;white-space:nowrap;">' +
+        (isSelf ? '' : '<button class="btn-danger-link" data-role="delete-user" data-email="' + escapeHtml(u.email) + '">Delete</button>') +
+        '</td>';
       html += '</tr>';
     });
     html += '</tbody></table></div>';
@@ -131,6 +145,14 @@ function umWireEvents() {
   });
   Array.prototype.forEach.call(document.querySelectorAll('[data-role="perm-select"]'), function (el) {
     el.onchange = function () { umChangePermission(el.getAttribute('data-email'), el.getAttribute('data-page'), el.value); };
+  });
+  Array.prototype.forEach.call(document.querySelectorAll('[data-role="delete-user"]'), function (el) {
+    el.onclick = function (e) {
+      e.preventDefault();
+      var email = el.getAttribute('data-email');
+      if (!confirm('Remove ' + email + '? Their custom permissions and Super Admin status (if any) will be cleared, reverting them to default access. This does not affect their quotes or other data, and if they have signed in before they will simply reappear here with default settings.')) return;
+      umDeleteUser(email);
+    };
   });
 }
 </script>
